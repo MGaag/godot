@@ -115,7 +115,9 @@ void SSDM::process(const Ref<RenderSceneBuffersRD> &p_render_buffers, const Proj
 	_dispatch(MODE_PROJECT, displacement, depth, p_render_buffers->get_texture_slice(RB_SCOPE_SSDM, RB_SSDM_VECTORS, 0, 0), size, 0, p_projection);
 	for (uint32_t mip = 1; mip < mipmaps; mip++) {
 		Size2i mip_size(MAX(1, size.x >> mip), MAX(1, size.y >> mip));
-		_dispatch(MODE_DOWNSAMPLE, vectors, depth, p_render_buffers->get_texture_slice(RB_SCOPE_SSDM, RB_SSDM_VECTORS, 0, mip), mip_size, mip - 1, p_projection);
+		RID source_mip = p_render_buffers->get_texture_slice(RB_SCOPE_SSDM, RB_SSDM_VECTORS, 0, mip - 1);
+		RID destination_mip = p_render_buffers->get_texture_slice(RB_SCOPE_SSDM, RB_SSDM_VECTORS, 0, mip);
+		_dispatch(MODE_DOWNSAMPLE, source_mip, depth, destination_mip, mip_size, 0, p_projection);
 	}
 	RID mapping = p_render_buffers->get_texture(RB_SCOPE_SSDM, RB_SSDM_MAPPING);
 	_dispatch(MODE_SOLVE, vectors, depth, mapping, size, mipmaps - 1, p_projection);
