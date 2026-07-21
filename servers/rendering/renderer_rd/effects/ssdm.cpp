@@ -4,6 +4,7 @@
 #include "ssdm.h"
 
 #include "core/config/project_settings.h"
+#include "servers/rendering/renderer_rd/effects/copy_effects.h"
 #include "servers/rendering/renderer_rd/framebuffer_cache_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/material_storage.h"
 #include "servers/rendering/renderer_rd/uniform_set_cache_rd.h"
@@ -31,6 +32,7 @@ SSDM::SSDM() {
 	for (int i = 0; i < MODE_MAX; i++) {
 		pipelines[i] = RD::get_singleton()->compute_pipeline_create(shader.version_get_shader(shader_version, i));
 	}
+	projection_buffer = RD::get_singleton()->uniform_buffer_create(sizeof(ProjectionData));
 	depth_shader.initialize({ "" });
 	depth_shader_version = depth_shader.version_create();
 	RD::PipelineDepthStencilState depth_state;
@@ -48,6 +50,7 @@ SSDM::SSDM() {
 }
 
 SSDM::~SSDM() {
+	RD::get_singleton()->free_rid(projection_buffer);
 	depth_shader.version_free(depth_shader_version);
 	shader.version_free(shader_version);
 }
@@ -80,22 +83,26 @@ void SSDM::_dispatch(Mode p_mode, RID p_source, RID p_depth, RID p_destination, 
 	pc.size[1] = p_size.y;
 	pc.source_mip = p_source_mip;
 	pc.refinement_steps = refinement_steps;
-	_store_projection(p_projection, pc.projection);
-	_store_projection(p_projection.inverse(), pc.inv_projection);
+	RD::Uniform projection_data(RD::UNIFORM_TYPE_UNIFORM_BUFFER, 0, projection_buffer);
 	RD::ComputeListID list = RD::get_singleton()->compute_list_begin();
 	RD::get_singleton()->compute_list_bind_compute_pipeline(list, pipelines[p_mode]);
 	RD::get_singleton()->compute_list_bind_uniform_set(list, cache->get_cache(shader_rid, 0, source, depth), 0);
 	RD::get_singleton()->compute_list_bind_uniform_set(list, cache->get_cache(shader_rid, 1, destination), 1);
+	RD::get_singleton()->compute_list_bind_uniform_set(list, cache->get_cache(shader_rid, 2, projection_data), 2);
 	RD::get_singleton()->compute_list_set_push_constant(list, &pc, sizeof(pc));
 	RD::get_singleton()->compute_list_dispatch_threads(list, p_size.x, p_size.y, 1);
 	RD::get_singleton()->compute_list_end();
 }
 
-void SSDM::process(const Ref<RenderSceneBuffersRD> &p_render_buffers, const Projection &p_projection) {
+void SSDM::process(const Ref<RenderSceneBuffersRD> &p_render_buffers, const Projection &p_projection, CopyEffects &p_copy_effects) {
 	ERR_FAIL_COND(p_render_buffers.is_null());
 	const Size2i size = p_render_buffers->get_internal_size();
 	max_mipmaps = GLOBAL_GET("rendering/renderer/ssdm/max_mipmaps");
 	refinement_steps = GLOBAL_GET("rendering/renderer/ssdm/refinement_steps");
+	ProjectionData projection_data;
+	_store_projection(p_projection, projection_data.projection);
+	_store_projection(p_projection.inverse(), projection_data.inv_projection);
+	RD::get_singleton()->buffer_update(projection_buffer, 0, sizeof(projection_data), &projection_data);
 	const uint32_t mipmaps = MIN(uint32_t(max_mipmaps), uint32_t(Image::get_image_required_mipmaps(size.x, size.y, Image::FORMAT_RGBAF) + 1));
 	const uint32_t usage = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_STORAGE_BIT;
 	if (!p_render_buffers->has_texture(RB_SCOPE_SSDM, RB_SSDM_VECTORS)) {
@@ -113,9 +120,11 @@ void SSDM::process(const Ref<RenderSceneBuffersRD> &p_render_buffers, const Proj
 	RID mapping = p_render_buffers->get_texture(RB_SCOPE_SSDM, RB_SSDM_MAPPING);
 	_dispatch(MODE_SOLVE, vectors, depth, mapping, size, mipmaps - 1, p_projection);
 	if (!p_render_buffers->has_texture(RB_SCOPE_SSDM, RB_SSDM_COLOR)) {
-		p_render_buffers->create_texture(RB_SCOPE_SSDM, RB_SSDM_COLOR, RD::DATA_FORMAT_A2B10G10R10_UNORM_PACK32, RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_CAN_COPY_TO_BIT, RD::TEXTURE_SAMPLES_1, size);
+		p_render_buffers->create_texture(RB_SCOPE_SSDM, RB_SSDM_COLOR, RD::DATA_FORMAT_A2B10G10R10_UNORM_PACK32, RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT, RD::TEXTURE_SAMPLES_1, size);
 	}
-	RD::get_singleton()->texture_copy(p_render_buffers->get_internal_texture(), p_render_buffers->get_texture(RB_SCOPE_SSDM, RB_SSDM_COLOR), Vector3(), Vector3(), Vector3(size.x, size.y, 1), 0, 0, 0, 0);
+	RID color_copy = p_render_buffers->get_texture(RB_SCOPE_SSDM, RB_SSDM_COLOR);
+	RID color_copy_fb = FramebufferCacheRD::get_singleton()->get_cache(color_copy);
+	p_copy_effects.copy_to_fb_rect(p_render_buffers->get_internal_texture(), color_copy_fb, Rect2i(0, 0, size.x, size.y));
 	if (!p_render_buffers->has_texture(RB_SCOPE_SSDM, RB_SSDM_DEPTH)) {
 		p_render_buffers->create_texture(RB_SCOPE_SSDM, RB_SSDM_DEPTH, RD::DATA_FORMAT_R32_SFLOAT, usage, RD::TEXTURE_SAMPLES_1, size);
 	}

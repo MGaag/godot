@@ -10,9 +10,12 @@ layout(push_constant, std430) uniform Params {
 	ivec2 size;
 	int source_mip;
 	int refinement_steps;
+} params;
+
+layout(set = 2, binding = 0, std140) uniform ProjectionData {
 	mat4 projection;
 	mat4 inv_projection;
-} params;
+} projection_data;
 
 layout(set = 0, binding = 0) uniform sampler2D source;
 layout(set = 0, binding = 1) uniform sampler2D depth_texture;
@@ -36,7 +39,7 @@ void main() {
 #endif
 
 vec2 project_view(vec3 p) {
-	vec4 clip = params.projection * vec4(p, 1.0);
+	vec4 clip = projection_data.projection * vec4(p, 1.0);
 	return clip.xy / clip.w * 0.5 + 0.5;
 }
 
@@ -46,11 +49,11 @@ void main() {
 	if (any(greaterThanEqual(pixel, params.size))) return;
 	vec2 uv = (vec2(pixel) + 0.5) / vec2(params.size);
 	float depth = texelFetch(depth_texture, pixel, 0).r;
-	vec4 view_h = params.inv_projection * vec4(uv * 2.0 - 1.0, depth, 1.0);
+	vec4 view_h = projection_data.inv_projection * vec4(uv * 2.0 - 1.0, depth, 1.0);
 	vec3 view = view_h.xyz / view_h.w;
 	float displacement = texelFetch(source, pixel, 0).r;
 	vec3 displaced = view + normalize(view) * displacement;
-	vec4 displaced_clip = params.projection * vec4(displaced, 1.0);
+	vec4 displaced_clip = projection_data.projection * vec4(displaced, 1.0);
 	float target_depth = displacement == 0.0 ? depth : displaced_clip.z / displaced_clip.w;
 	imageStore(destination, pixel, vec4(project_view(displaced) - uv, target_depth, 1.0));
 }

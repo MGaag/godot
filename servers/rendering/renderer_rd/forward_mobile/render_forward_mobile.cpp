@@ -1424,7 +1424,7 @@ void RenderForwardMobile::_render_ssdm_pass(RenderDataRD *p_render_data) {
 	Vector<Color> clear;
 	clear.push_back(Color(0, 0, 0, 0));
 	_render_list_with_draw_list(&params, framebuffer, RD::DRAW_CLEAR_COLOR_0, clear, 1.0f, 0, p_render_data->render_region);
-	ssdm.process(p_render_data->render_buffers, p_render_data->scene_data->cam_projection);
+	ssdm.process(p_render_data->render_buffers, p_render_data->scene_data->cam_projection, *copy_effects);
 	ssdm.apply_composite(p_render_data->render_buffers);
 }
 

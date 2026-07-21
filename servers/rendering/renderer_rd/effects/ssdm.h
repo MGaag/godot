@@ -18,11 +18,15 @@
 
 namespace RendererRD {
 
+class CopyEffects;
+
 class SSDM {
 	struct PushConstant {
 		int32_t size[2];
 		int32_t source_mip;
 		int32_t refinement_steps;
+	};
+	struct ProjectionData {
 		float projection[16];
 		float inv_projection[16];
 	};
@@ -31,6 +35,7 @@ class SSDM {
 	SsdmShaderRD shader;
 	RID shader_version;
 	RID pipelines[MODE_MAX];
+	RID projection_buffer;
 	SsdmDepthShaderRD depth_shader;
 	RID depth_shader_version;
 	PipelineCacheRD depth_pipeline;
@@ -45,7 +50,7 @@ public:
 	~SSDM();
 
 	RID get_displacement_framebuffer(const Ref<RenderSceneBuffersRD> &p_render_buffers);
-	void process(const Ref<RenderSceneBuffersRD> &p_render_buffers, const Projection &p_projection);
+	void process(const Ref<RenderSceneBuffersRD> &p_render_buffers, const Projection &p_projection, CopyEffects &p_copy_effects);
 	void apply_composite(const Ref<RenderSceneBuffersRD> &p_render_buffers);
 	bool is_enabled() const;
 };
