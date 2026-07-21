@@ -42,6 +42,9 @@ SSDM::SSDM() {
 	GLOBAL_DEF("rendering/renderer/ssdm/enabled", false);
 	GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/renderer/ssdm/max_mipmaps", PROPERTY_HINT_RANGE, "2,8,1"), 6);
 	GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/renderer/ssdm/refinement_steps", PROPERTY_HINT_RANGE, "1,4,1"), 2);
+	ProjectSettings::get_singleton()->set_as_basic("rendering/renderer/ssdm/enabled", true);
+	ProjectSettings::get_singleton()->set_as_basic("rendering/renderer/ssdm/max_mipmaps", true);
+	ProjectSettings::get_singleton()->set_as_basic("rendering/renderer/ssdm/refinement_steps", true);
 }
 
 SSDM::~SSDM() {
