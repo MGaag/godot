@@ -1222,7 +1222,7 @@ void fragment_shader(in SceneData scene_data) {
 	vec3 view_highp = -normalize(vertex_interp);
 #endif
 	vec3 albedo_highp = vec3(1.0);
-	float displacement_highp = 0.0; // SSDM is currently scheduled by the mobile renderer.
+	vec2 displacement_highp = vec2(0.0); // SSDM is currently scheduled by the mobile renderer.
 	vec3 backlight = vec3(0.0);
 	vec4 transmittance_color = vec4(0.0, 0.0, 0.0, 1.0);
 	float transmittance_depth = 0.0;

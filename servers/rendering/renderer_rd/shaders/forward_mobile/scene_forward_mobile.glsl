@@ -1015,7 +1015,7 @@ layout(location = 4) out float depth_output_buffer;
 #endif // MODE_RENDER_MATERIAL
 
 #ifdef MODE_RENDER_SSDM
-layout(location = 0) out float displacement_output_buffer;
+layout(location = 0) out vec2 displacement_output_buffer;
 #endif
 
 #else // RENDER DEPTH
@@ -1143,7 +1143,7 @@ void main() {
 	vec3 view_highp = -normalize(vertex_interp);
 #endif
 	vec3 albedo_highp = vec3(1.0);
-	float displacement_highp = 0.0;
+	vec2 displacement_highp = vec2(0.0);
 	vec3 backlight_highp = vec3(0.0);
 	vec4 transmittance_color_highp = vec4(0.0);
 	float transmittance_depth_highp = 0.0;

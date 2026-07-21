@@ -72,13 +72,16 @@ RID SSDM::get_displacement_framebuffer(const Ref<RenderSceneBuffersRD> &p_render
 	const Size2i size = p_render_buffers->get_internal_size();
 	max_mipmaps = GLOBAL_GET("rendering/renderer/ssdm/max_mipmaps");
 	const uint32_t mipmaps = MIN(uint32_t(max_mipmaps), uint32_t(Image::get_image_required_mipmaps(size.x, size.y, Image::FORMAT_RGBAF) + 1));
+	if (p_render_buffers->has_texture(RB_SCOPE_SSDM, RB_SSDM_DISPLACEMENT) && p_render_buffers->get_texture_format(RB_SCOPE_SSDM, RB_SSDM_DISPLACEMENT).format != RD::DATA_FORMAT_R16G16_SFLOAT) {
+		p_render_buffers->clear_context(RB_SCOPE_SSDM);
+	}
 	if (p_render_buffers->has_texture(RB_SCOPE_SSDM, RB_SSDM_VECTORS) && p_render_buffers->get_texture_format(RB_SCOPE_SSDM, RB_SSDM_VECTORS).mipmaps != mipmaps) {
 		// All SSDM resources share this context. Recreate them together so the A
 		// and B pyramids always have matching layouts after a setting change.
 		p_render_buffers->clear_context(RB_SCOPE_SSDM);
 	}
 	if (!p_render_buffers->has_texture(RB_SCOPE_SSDM, RB_SSDM_DISPLACEMENT)) {
-		p_render_buffers->create_texture(RB_SCOPE_SSDM, RB_SSDM_DISPLACEMENT, RD::DATA_FORMAT_R16_SFLOAT,
+		p_render_buffers->create_texture(RB_SCOPE_SSDM, RB_SSDM_DISPLACEMENT, RD::DATA_FORMAT_R16G16_SFLOAT,
 				RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_SAMPLING_BIT,
 				RD::TEXTURE_SAMPLES_1, size, p_render_buffers->get_view_count());
 	}

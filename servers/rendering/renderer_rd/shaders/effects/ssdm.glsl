@@ -57,38 +57,16 @@ bool finite_vec4(vec4 value) {
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
 	if (any(greaterThanEqual(pixel, params.size))) return;
-	vec2 uv = (vec2(pixel) + 0.5) / vec2(params.size);
 	float depth = texelFetch(depth_texture, pixel, 0).r;
-	float displacement = texelFetch(source, pixel, 0).r;
-	// Reverse-Z background has depth 0 and may reconstruct at infinity. Zero
-	// displacement is identity and must never pass through projection math.
-	if (displacement == 0.0 || depth <= 0.0 || isnan(displacement) || isinf(displacement)) {
+	vec2 displacement = texelFetch(source, pixel, 0).rg;
+	// Materials emit the source-to-target offset directly in normalized screen
+	// UV coordinates. Zero is the identity mapping for both geometry and the
+	// unwritten background; depth follows the source pixel during the gather.
+	if (!finite_vec2(displacement)) {
 		imageStore(destination, pixel, vec4(0.0, 0.0, depth, 1.0));
 		return;
 	}
-	vec4 view_h = projection_data.inv_projection * vec4(uv * 2.0 - 1.0, depth, 1.0);
-	if (!finite_vec4(view_h) || abs(view_h.w) < 1e-6) {
-		imageStore(destination, pixel, vec4(0.0, 0.0, depth, 1.0));
-		return;
-	}
-	vec3 view = view_h.xyz / view_h.w;
-	// DISPLACEMENT is a world-unit distance along the view-plane normal. The
-	// camera looks down -Z in view space, so +Z moves the sample toward it.
-	// Moving along normalize(view) would only move along the camera ray and
-	// therefore could never produce an XY screen-space displacement.
-	vec3 displaced = view + vec3(0.0, 0.0, displacement);
-	vec4 displaced_clip = projection_data.projection * vec4(displaced, 1.0);
-	if (!finite_vec4(displaced_clip) || displaced_clip.w <= 1e-6) {
-		imageStore(destination, pixel, vec4(0.0, 0.0, depth, 1.0));
-		return;
-	}
-	vec2 scatter = displaced_clip.xy / displaced_clip.w * 0.5 + 0.5 - uv;
-	float target_depth = displaced_clip.z / displaced_clip.w;
-	if (!finite_vec2(scatter) || isnan(target_depth) || isinf(target_depth) || target_depth < 0.0 || target_depth > 1.0) {
-		imageStore(destination, pixel, vec4(0.0, 0.0, depth, 1.0));
-		return;
-	}
-	imageStore(destination, pixel, vec4(scatter, target_depth, 1.0));
+	imageStore(destination, pixel, vec4(displacement, depth, 1.0));
 }
 #endif
 
