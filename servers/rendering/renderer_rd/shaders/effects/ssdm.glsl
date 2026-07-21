@@ -52,7 +52,11 @@ void main() {
 	vec4 view_h = projection_data.inv_projection * vec4(uv * 2.0 - 1.0, depth, 1.0);
 	vec3 view = view_h.xyz / view_h.w;
 	float displacement = texelFetch(source, pixel, 0).r;
-	vec3 displaced = view + normalize(view) * displacement;
+	// DISPLACEMENT is a world-unit distance along the view-plane normal. The
+	// camera looks down -Z in view space, so +Z moves the sample toward it.
+	// Moving along normalize(view) would only move along the camera ray and
+	// therefore could never produce an XY screen-space displacement.
+	vec3 displaced = view + vec3(0.0, 0.0, displacement);
 	vec4 displaced_clip = projection_data.projection * vec4(displaced, 1.0);
 	float target_depth = displacement == 0.0 ? depth : displaced_clip.z / displaced_clip.w;
 	imageStore(destination, pixel, vec4(project_view(displaced) - uv, target_depth, 1.0));
