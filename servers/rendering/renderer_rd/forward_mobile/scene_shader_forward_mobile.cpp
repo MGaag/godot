@@ -409,6 +409,9 @@ void SceneShaderForwardMobile::ShaderData::_create_pipeline(PipelineKey p_pipeli
 		} else if (p_pipeline_key.version == SHADER_VERSION_DEPTH_PASS_WITH_MATERIAL) {
 			// Writes to normal and roughness in opaque way.
 			blend_state = RD::PipelineColorBlendState::create_disabled(5);
+		} else if (p_pipeline_key.version == SHADER_VERSION_SSDM_PASS) {
+			// Writes one scalar displacement attachment after alpha testing.
+			blend_state = RD::PipelineColorBlendState::create_disabled(1);
 		} else {
 			// Do not use this version (error case).
 		}
@@ -420,9 +423,20 @@ void SceneShaderForwardMobile::ShaderData::_create_pipeline(PipelineKey p_pipeli
 		} else if (p_pipeline_key.version == SHADER_VERSION_DEPTH_PASS_WITH_MATERIAL) {
 			// Writes to normal and roughness in opaque way.
 			blend_state = RD::PipelineColorBlendState::create_disabled(5);
+		} else if (p_pipeline_key.version == SHADER_VERSION_SSDM_PASS) {
+			// Writes one scalar displacement attachment.
+			blend_state = RD::PipelineColorBlendState::create_disabled(1);
 		} else {
 			// Unknown pipeline version.
 		}
+	}
+
+	if (p_pipeline_key.version == SHADER_VERSION_SSDM_PASS) {
+		// The opaque pass already established depth. SSDM only extracts a scalar
+		// for the visible surface and must not modify that depth attachment.
+		depth_stencil_state.enable_depth_test = true;
+		depth_stencil_state.enable_depth_write = false;
+		depth_stencil_state.depth_compare_operator = RD::COMPARE_OP_EQUAL;
 	}
 
 	// Convert the specialization from the key to pipeline specialization constants.

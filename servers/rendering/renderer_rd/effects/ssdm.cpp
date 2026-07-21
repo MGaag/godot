@@ -50,7 +50,15 @@ SSDM::SSDM() {
 }
 
 SSDM::~SSDM() {
-	RD::get_singleton()->free_rid(projection_buffer);
+	depth_pipeline.clear();
+	for (int i = 0; i < MODE_MAX; i++) {
+		if (RD::get_singleton()->compute_pipeline_is_valid(pipelines[i])) {
+			RD::get_singleton()->free_rid(pipelines[i]);
+		}
+	}
+	if (projection_buffer.is_valid()) {
+		RD::get_singleton()->free_rid(projection_buffer);
+	}
 	depth_shader.version_free(depth_shader_version);
 	shader.version_free(shader_version);
 }
