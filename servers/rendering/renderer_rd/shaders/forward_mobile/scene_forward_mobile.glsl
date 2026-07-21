@@ -1403,6 +1403,11 @@ void main() {
 #endif // ALPHA_ANTIALIASING_EDGE_USED
 
 #ifdef MODE_RENDER_SSDM
+#if defined(USE_OPAQUE_PREPASS) || defined(ALPHA_ANTIALIASING_EDGE_USED)
+	if (alpha < half(scene_data.opaque_prepass_threshold)) {
+		discard;
+	}
+#endif // USE_OPAQUE_PREPASS || ALPHA_ANTIALIASING_EDGE_USED
 	displacement_output_buffer = displacement_highp;
 #elif defined(MODE_RENDER_DEPTH)
 #if defined(USE_OPAQUE_PREPASS) || defined(ALPHA_ANTIALIASING_EDGE_USED)
