@@ -34,7 +34,8 @@ layout(rgba16f, set = 1, binding = 0) uniform restrict writeonly image2D destina
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
 	if (any(greaterThanEqual(pixel, params.size))) return;
-	vec2 source_uv = texelFetch(depth_texture, pixel, 0).rg;
+	vec2 target_uv = (vec2(pixel) + 0.5) / vec2(params.size);
+	vec2 source_uv = clamp(target_uv + texelFetch(depth_texture, pixel, 0).rg, vec2(0.0), vec2(1.0));
 	imageStore(destination, pixel, textureLod(source, source_uv, 0.0));
 }
 #endif
@@ -79,25 +80,42 @@ void main() {
 #endif
 
 #ifdef MODE_SOLVE
+vec2 bilerp(vec2 p00, vec2 p10, vec2 p01, vec2 p11, vec2 uv) {
+	return mix(mix(p00, p10, uv.x), mix(p01, p11, uv.x), uv.y);
+}
+
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
 	if (any(greaterThanEqual(pixel, params.size))) return;
 	vec2 target_uv = (vec2(pixel) + 0.5) / vec2(params.size);
-	vec2 source_uv = params.source_mip == params.coarsest_mip ? target_uv : textureLod(depth_texture, target_uv, 0.0).rg;
+	vec2 source_uv = params.source_mip == params.coarsest_mip ? target_uv : target_uv + textureLod(depth_texture, target_uv, 0.0).rg;
 	vec2 half_texel = 0.5 / vec2(params.size);
 	for (int iteration = 0; iteration < params.refinement_steps; iteration++) {
 		vec2 q00 = clamp(source_uv + vec2(-half_texel.x, -half_texel.y), vec2(0.0), vec2(1.0));
 		vec2 q10 = clamp(source_uv + vec2( half_texel.x, -half_texel.y), vec2(0.0), vec2(1.0));
 		vec2 q01 = clamp(source_uv + vec2(-half_texel.x,  half_texel.y), vec2(0.0), vec2(1.0));
 		vec2 q11 = clamp(source_uv + vec2( half_texel.x,  half_texel.y), vec2(0.0), vec2(1.0));
-		vec2 pointed_center = q00 + textureLod(source, q00, float(params.source_mip)).rg;
-		pointed_center += q10 + textureLod(source, q10, float(params.source_mip)).rg;
-		pointed_center += q01 + textureLod(source, q01, float(params.source_mip)).rg;
-		pointed_center += q11 + textureLod(source, q11, float(params.source_mip)).rg;
-		pointed_center *= 0.25;
-		source_uv = clamp(source_uv + target_uv - pointed_center, vec2(0.0), vec2(1.0));
+		vec2 t00 = q00 + textureLod(source, q00, float(params.source_mip)).rg;
+		vec2 t10 = q10 + textureLod(source, q10, float(params.source_mip)).rg;
+		vec2 t01 = q01 + textureLod(source, q01, float(params.source_mip)).rg;
+		vec2 t11 = q11 + textureLod(source, q11, float(params.source_mip)).rg;
+		vec2 local_uv = vec2(0.5);
+		for (int inverse_iteration = 0; inverse_iteration < 3; inverse_iteration++) {
+			vec2 residual = bilerp(t00, t10, t01, t11, local_uv) - target_uv;
+			vec2 derivative_u = mix(t10 - t00, t11 - t01, local_uv.y);
+			vec2 derivative_v = mix(t01 - t00, t11 - t10, local_uv.x);
+			float determinant = derivative_u.x * derivative_v.y - derivative_u.y * derivative_v.x;
+			if (abs(determinant) < 1e-10) {
+				break;
+			}
+			local_uv -= vec2(
+					residual.x * derivative_v.y - residual.y * derivative_v.x,
+					derivative_u.x * residual.y - derivative_u.y * residual.x) /
+					determinant;
+		}
+		source_uv = clamp(bilerp(q00, q10, q01, q11, local_uv), vec2(0.0), vec2(1.0));
 	}
-	imageStore(destination, pixel, vec4(source_uv, 0.0, 0.0));
+	imageStore(destination, pixel, vec4(source_uv - target_uv, 0.0, 0.0));
 }
 #endif
 
@@ -105,7 +123,8 @@ void main() {
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
 	if (any(greaterThanEqual(pixel, params.size))) return;
-	vec2 source_uv = texelFetch(depth_texture, pixel, 0).rg;
+	vec2 target_uv = (vec2(pixel) + 0.5) / vec2(params.size);
+	vec2 source_uv = clamp(target_uv + texelFetch(depth_texture, pixel, 0).rg, vec2(0.0), vec2(1.0));
 	imageStore(destination, pixel, textureLod(source, source_uv, 0.0));
 }
 #endif
@@ -114,7 +133,8 @@ void main() {
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
 	if (any(greaterThanEqual(pixel, params.size))) return;
-	vec2 source_uv = texelFetch(depth_texture, pixel, 0).rg;
+	vec2 target_uv = (vec2(pixel) + 0.5) / vec2(params.size);
+	vec2 source_uv = clamp(target_uv + texelFetch(depth_texture, pixel, 0).rg, vec2(0.0), vec2(1.0));
 	float target_depth = textureLod(source, source_uv, 0.0).b;
 	imageStore(destination, pixel, vec4(target_depth));
 }

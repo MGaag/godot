@@ -22,7 +22,7 @@ layout(set = 0, binding = 2) uniform sampler2D source_mapping;
 layout(location = 0) out vec4 frag_color;
 
 void main() {
-	vec2 source_uv = texture(source_mapping, uv).rg;
+	vec2 source_uv = clamp(uv + texture(source_mapping, uv).rg, vec2(0.0), vec2(1.0));
 	frag_color = texture(source_color, source_uv);
 	gl_FragDepth = texture(displaced_depth, uv).r;
 }
