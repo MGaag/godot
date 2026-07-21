@@ -1274,9 +1274,11 @@ void RenderForwardMobile::_render_scene(RenderDataRD *p_render_data, const Color
 
 		RD::get_singleton()->draw_command_end_label(); //Render Opaque
 
-		RD::get_singleton()->draw_list_end();
-		_render_ssdm_pass(p_render_data); // Render Screen Space Displacement Mapping pass.
-		draw_list = RD::get_singleton()->draw_list_begin(framebuffer, RD::DRAW_DEFAULT_ALL, Vector<Color>(), 1.0f, 0, p_render_data->render_region, breadcrumb);
+		if (ssdm.is_enabled()) {
+			RD::get_singleton()->draw_list_end();
+			_render_ssdm_pass(p_render_data); // Render Screen Space Displacement Mapping pass.
+			draw_list = RD::get_singleton()->draw_list_begin(framebuffer, RD::DRAW_DEFAULT_ALL, Vector<Color>(), 1.0f, 0, p_render_data->render_region, breadcrumb);
+		}
 
 		if (draw_sky || draw_sky_fog_only) {
 			RD::get_singleton()->draw_command_begin_label("Draw Sky");
@@ -1403,7 +1405,7 @@ void RenderForwardMobile::_render_scene(RenderDataRD *p_render_data, const Color
 
 void RenderForwardMobile::_render_ssdm_pass(RenderDataRD *p_render_data) {
 	RENDER_TIMESTAMP("SSDM Pass");
-	if (p_render_data->reflection_probe.is_valid() || p_render_data->scene_data->view_count != 1 || p_render_data->render_buffers->get_msaa_3d() != RSE::VIEWPORT_MSAA_DISABLED) {
+	if (!ssdm.is_enabled() || p_render_data->reflection_probe.is_valid() || p_render_data->scene_data->view_count != 1 || p_render_data->render_buffers->get_msaa_3d() != RSE::VIEWPORT_MSAA_DISABLED) {
 		return;
 	}
 	bool has_displacement = false;
@@ -1423,6 +1425,7 @@ void RenderForwardMobile::_render_ssdm_pass(RenderDataRD *p_render_data) {
 	clear.push_back(Color(0, 0, 0, 0));
 	_render_list_with_draw_list(&params, framebuffer, RD::DRAW_CLEAR_COLOR_0, clear, 1.0f, 0, p_render_data->render_region);
 	ssdm.process(p_render_data->render_buffers, p_render_data->scene_data->cam_projection);
+	ssdm.apply_composite(p_render_data->render_buffers);
 }
 
 
