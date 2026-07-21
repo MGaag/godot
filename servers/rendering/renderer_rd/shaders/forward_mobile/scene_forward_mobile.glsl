@@ -669,6 +669,7 @@ void vertex_shader(in vec3 vertex,
 		gl_Position.w = 1.0;
 	}
 #endif // MODE_RENDER_MATERIAL
+
 #ifdef MODE_RENDER_MOTION_VECTORS
 	screen_position_output = gl_Position;
 #endif // MODE_RENDER_MOTION_VECTORS
@@ -1013,6 +1014,10 @@ layout(location = 4) out float depth_output_buffer;
 
 #endif // MODE_RENDER_MATERIAL
 
+#ifdef MODE_RENDER_SSDM
+layout(location = 0) out float displacement_output_buffer;
+#endif
+
 #else // RENDER DEPTH
 
 #ifdef MODE_MULTIPLE_RENDER_TARGETS
@@ -1138,6 +1143,7 @@ void main() {
 	vec3 view_highp = -normalize(vertex_interp);
 #endif
 	vec3 albedo_highp = vec3(1.0);
+	float displacement_highp = 0.0;
 	vec3 backlight_highp = vec3(0.0);
 	vec4 transmittance_color_highp = vec4(0.0);
 	float transmittance_depth_highp = 0.0;
@@ -1396,7 +1402,9 @@ void main() {
 	alpha = compute_alpha_antialiasing_edge(alpha, alpha_texture_coordinate, alpha_antialiasing_edge);
 #endif // ALPHA_ANTIALIASING_EDGE_USED
 
-#ifdef MODE_RENDER_DEPTH
+#ifdef MODE_RENDER_SSDM
+	displacement_output_buffer = displacement_highp;
+#elif defined(MODE_RENDER_DEPTH)
 #if defined(USE_OPAQUE_PREPASS) || defined(ALPHA_ANTIALIASING_EDGE_USED)
 	if (alpha < half(scene_data.opaque_prepass_threshold)) {
 		discard;

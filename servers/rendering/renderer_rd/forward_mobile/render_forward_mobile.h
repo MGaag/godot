@@ -33,6 +33,7 @@
 #include "core/templates/paged_allocator.h"
 #include "servers/rendering/multi_uma_buffer.h"
 #include "servers/rendering/renderer_rd/forward_mobile/scene_shader_forward_mobile.h"
+#include "servers/rendering/renderer_rd/effects/ssdm.h"
 #include "servers/rendering/renderer_rd/renderer_scene_render_rd.h"
 
 #define RB_SCOPE_MOBILE SNAME("mobile")
@@ -73,6 +74,7 @@ private:
 	/* Scene Shader */
 
 	SceneShaderForwardMobile scene_shader;
+	RendererRD::SSDM ssdm;
 	bool disable_ubershaders = false;
 
 	/* Render Buffer */
@@ -116,6 +118,7 @@ private:
 		// PASS_MODE_DEPTH_NORMAL_ROUGHNESS,
 		// PASS_MODE_DEPTH_NORMAL_ROUGHNESS_VOXEL_GI,
 		PASS_MODE_DEPTH_MATERIAL,
+		PASS_MODE_SSDM,
 		// PASS_MODE_SDF,
 		PASS_MODE_MOTION_VECTORS,
 	};
@@ -157,6 +160,10 @@ private:
 			base_specialization = p_base_specialization;
 		}
 	};
+
+	/* Render SSDM */
+
+	void _render_ssdm_pass(RenderDataRD *p_render_data);
 
 	/* Render shadows */
 

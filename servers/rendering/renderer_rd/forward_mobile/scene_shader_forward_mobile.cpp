@@ -61,6 +61,7 @@ void SceneShaderForwardMobile::ShaderData::set_code(const String &p_code) {
 	cull_mode = RSE::CULL_MODE_BACK;
 
 	uses_point_size = false;
+	uses_displacement = false;
 	uses_alpha = false;
 	uses_alpha_clip = false;
 	uses_alpha_antialiasing = false;
@@ -145,6 +146,7 @@ void SceneShaderForwardMobile::ShaderData::set_code(const String &p_code) {
 	actions.usage_flag_pointers["ANISOTROPY_FLOW"] = &uses_tangent;
 
 	actions.usage_flag_pointers["POINT_SIZE"] = &uses_point_size;
+	actions.usage_flag_pointers["DISPLACEMENT"] = &uses_displacement;
 	actions.usage_flag_pointers["POINT_COORD"] = &uses_point_size;
 
 	actions.write_flag_pointers["MODELVIEW_MATRIX"] = &writes_modelview_or_projection;
@@ -611,6 +613,7 @@ void SceneShaderForwardMobile::init(const String p_defines) {
 				shader_versions.push_back(ShaderRD::VariantDefine(shader_group, base_define + "\n#define MODE_RENDER_DEPTH\n#define SHADOW_PASS\n", default_enabled)); // SHADER_VERSION_SHADOW_PASS, should probably change this to MODE_RENDER_SHADOW because we don't have a depth pass here...
 				shader_versions.push_back(ShaderRD::VariantDefine(shader_group, base_define + "\n#define MODE_RENDER_DEPTH\n#define MODE_DUAL_PARABOLOID\n#define SHADOW_PASS\n", default_enabled)); // SHADER_VERSION_SHADOW_PASS_DP
 				shader_versions.push_back(ShaderRD::VariantDefine(shader_group, base_define + "\n#define MODE_RENDER_DEPTH\n#define MODE_RENDER_MATERIAL\n", default_enabled)); // SHADER_VERSION_DEPTH_PASS_WITH_MATERIAL
+				shader_versions.push_back(ShaderRD::VariantDefine(shader_group, base_define + "\n#define MODE_RENDER_DEPTH\n#define MODE_RENDER_SSDM\n", default_enabled)); // SHADER_VERSION_SSDM_PASS
 
 				// Multiview versions of our shaders.
 				shader_versions.push_back(ShaderRD::VariantDefine(shader_group_multiview, base_define + "\n#define USE_MULTIVIEW\n", false)); // SHADER_VERSION_COLOR_PASS_MULTIVIEW
@@ -689,6 +692,8 @@ void SceneShaderForwardMobile::init(const String p_defines) {
 		actions.renames["NORMAL_MAP_DEPTH"] = "normal_map_depth_highp";
 		actions.renames["BENT_NORMAL_MAP"] = "bent_normal_map_highp";
 		actions.renames["ALBEDO"] = "albedo_highp";
+		actions.renames["DISPLACEMENT"] = "displacement_highp";
+		actions.usage_defines["DISPLACEMENT"] = "#define DISPLACEMENT_USED\n";
 		actions.renames["ALPHA"] = "alpha_highp";
 		actions.renames["PREMUL_ALPHA_FACTOR"] = "premul_alpha_highp";
 		actions.renames["METALLIC"] = "metallic_highp";

@@ -49,6 +49,7 @@ public:
 		SHADER_VERSION_SHADOW_PASS,
 		SHADER_VERSION_SHADOW_PASS_DP,
 		SHADER_VERSION_DEPTH_PASS_WITH_MATERIAL,
+		SHADER_VERSION_SSDM_PASS,
 
 		SHADER_VERSION_COLOR_PASS_MULTIVIEW,
 		SHADER_VERSION_LIGHTMAP_COLOR_PASS_MULTIVIEW,
@@ -245,6 +246,7 @@ public:
 		int cull_mode = RSE::CULL_MODE_BACK;
 
 		bool uses_point_size = false;
+		bool uses_displacement = false;
 		bool uses_alpha = false;
 		bool uses_blend_alpha = false;
 		bool uses_alpha_clip = false;

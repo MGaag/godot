@@ -1274,6 +1274,10 @@ void RenderForwardMobile::_render_scene(RenderDataRD *p_render_data, const Color
 
 		RD::get_singleton()->draw_command_end_label(); //Render Opaque
 
+		RD::get_singleton()->draw_list_end();
+		_render_ssdm_pass(p_render_data); // Render Screen Space Displacement Mapping pass.
+		draw_list = RD::get_singleton()->draw_list_begin(framebuffer, RD::DRAW_DEFAULT_ALL, Vector<Color>(), 1.0f, 0, p_render_data->render_region, breadcrumb);
+
 		if (draw_sky || draw_sky_fog_only) {
 			RD::get_singleton()->draw_command_begin_label("Draw Sky");
 
@@ -1395,6 +1399,32 @@ void RenderForwardMobile::_render_scene(RenderDataRD *p_render_data, const Color
 
 	_render_buffers_debug_draw(p_render_data);
 }
+
+
+void RenderForwardMobile::_render_ssdm_pass(RenderDataRD *p_render_data) {
+	RENDER_TIMESTAMP("SSDM Pass");
+	if (p_render_data->reflection_probe.is_valid() || p_render_data->scene_data->view_count != 1 || p_render_data->render_buffers->get_msaa_3d() != RSE::VIEWPORT_MSAA_DISABLED) {
+		return;
+	}
+	bool has_displacement = false;
+	for (const GeometryInstanceSurfaceDataCache *surface : render_list[RENDER_LIST_OPAQUE].elements) {
+		if (surface->shader && surface->shader->uses_displacement) {
+			has_displacement = true;
+			break;
+		}
+	}
+	if (!has_displacement) {
+		return;
+	}
+	RID framebuffer = ssdm.get_displacement_framebuffer(p_render_data->render_buffers);
+	RID uniforms = _setup_render_pass_uniform_set(RENDER_LIST_OPAQUE, p_render_data, false, RID(), p_render_data->render_buffers->get_samplers(), true);
+	RenderListParameters params(render_list[RENDER_LIST_OPAQUE].elements.ptr(), render_list[RENDER_LIST_OPAQUE].element_info.ptr(), render_list[RENDER_LIST_OPAQUE].elements.size(), false, PASS_MODE_SSDM, uniforms, scene_shader.default_specialization, false, Vector2(), p_render_data->scene_data->lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold);
+	Vector<Color> clear;
+	clear.push_back(Color(0, 0, 0, 0));
+	_render_list_with_draw_list(&params, framebuffer, RD::DRAW_CLEAR_COLOR_0, clear, 1.0f, 0, p_render_data->render_region);
+	ssdm.process(p_render_data->render_buffers, p_render_data->scene_data->cam_projection);
+}
+
 
 /* these are being called from RendererSceneRenderRD::_pre_opaque_render */
 
@@ -2397,6 +2427,9 @@ void RenderForwardMobile::_render_list(RenderingDevice::DrawListID p_draw_list, 
 		case PASS_MODE_DEPTH_MATERIAL: {
 			_render_list_template<PASS_MODE_DEPTH_MATERIAL>(p_draw_list, p_framebuffer_Format, p_params, p_from_element, p_to_element);
 		} break;
+		case PASS_MODE_SSDM: {
+			_render_list_template<PASS_MODE_SSDM>(p_draw_list, p_framebuffer_Format, p_params, p_from_element, p_to_element);
+		} break;
 		case PASS_MODE_MOTION_VECTORS: {
 			_render_list_template<PASS_MODE_MOTION_VECTORS>(p_draw_list, p_framebuffer_Format, p_params, p_from_element, p_to_element);
 		}
@@ -2505,6 +2538,11 @@ void RenderForwardMobile::_render_list_template(RenderingDevice::DrawListID p_dr
 		if (!mesh_surface) {
 			continue;
 		}
+		if constexpr (p_pass_mode == PASS_MODE_SSDM) {
+			if (!shader->uses_displacement) {
+				continue;
+			}
+		}
 
 		//request a redraw if one of the shaders uses TIME
 		if (shader->uses_time) {
@@ -2546,6 +2584,10 @@ void RenderForwardMobile::_render_list_template(RenderingDevice::DrawListID p_dr
 			case PASS_MODE_DEPTH_MATERIAL: {
 				ERR_FAIL_COND_MSG(p_params->view_count > 1, "Multiview not supported for material pass");
 				pipeline_key.version = SceneShaderForwardMobile::SHADER_VERSION_DEPTH_PASS_WITH_MATERIAL;
+			} break;
+			case PASS_MODE_SSDM: {
+				ERR_FAIL_COND_MSG(p_params->view_count > 1, "Multiview not supported for SSDM pass");
+				pipeline_key.version = SceneShaderForwardMobile::SHADER_VERSION_SSDM_PASS;
 			} break;
 			case PASS_MODE_MOTION_VECTORS: {
 				pipeline_key.version = SceneShaderForwardMobile::SHADER_VERSION_MOTION_VECTORS_MULTIVIEW;
