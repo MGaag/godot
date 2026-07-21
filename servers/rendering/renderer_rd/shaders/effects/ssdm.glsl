@@ -10,6 +10,7 @@ layout(push_constant, std430) uniform Params {
 	ivec2 size;
 	int source_mip;
 	int refinement_steps;
+	int coarsest_mip;
 } params;
 
 layout(set = 2, binding = 0, std140) uniform ProjectionData {
@@ -81,14 +82,20 @@ void main() {
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
 	if (any(greaterThanEqual(pixel, params.size))) return;
-	vec2 uv = (vec2(pixel) + 0.5) / vec2(params.size);
-	vec2 source_uv = uv;
-	for (int mip = params.source_mip; mip >= 0; mip--) {
-		// Linear sampling is the barycenter of the four surrounding scatter vectors.
-		for (int iteration = 0; iteration < params.refinement_steps; iteration++) {
-			vec2 scatter = textureLod(source, source_uv, float(mip)).rg;
-			source_uv = clamp(uv - scatter, vec2(0.0), vec2(1.0));
-		}
+	vec2 target_uv = (vec2(pixel) + 0.5) / vec2(params.size);
+	vec2 source_uv = params.source_mip == params.coarsest_mip ? target_uv : textureLod(depth_texture, target_uv, 0.0).rg;
+	vec2 half_texel = 0.5 / vec2(params.size);
+	for (int iteration = 0; iteration < params.refinement_steps; iteration++) {
+		vec2 q00 = clamp(source_uv + vec2(-half_texel.x, -half_texel.y), vec2(0.0), vec2(1.0));
+		vec2 q10 = clamp(source_uv + vec2( half_texel.x, -half_texel.y), vec2(0.0), vec2(1.0));
+		vec2 q01 = clamp(source_uv + vec2(-half_texel.x,  half_texel.y), vec2(0.0), vec2(1.0));
+		vec2 q11 = clamp(source_uv + vec2( half_texel.x,  half_texel.y), vec2(0.0), vec2(1.0));
+		vec2 pointed_center = q00 + textureLod(source, q00, float(params.source_mip)).rg;
+		pointed_center += q10 + textureLod(source, q10, float(params.source_mip)).rg;
+		pointed_center += q01 + textureLod(source, q01, float(params.source_mip)).rg;
+		pointed_center += q11 + textureLod(source, q11, float(params.source_mip)).rg;
+		pointed_center *= 0.25;
+		source_uv = clamp(source_uv + target_uv - pointed_center, vec2(0.0), vec2(1.0));
 	}
 	imageStore(destination, pixel, vec4(source_uv, 0.0, 0.0));
 }

@@ -25,6 +25,7 @@ class SSDM {
 		int32_t size[2];
 		int32_t source_mip;
 		int32_t refinement_steps;
+		int32_t coarsest_mip;
 	};
 	struct ProjectionData {
 		float projection[16];
@@ -43,7 +44,7 @@ class SSDM {
 	int refinement_steps = 2;
 
 	static void _store_projection(const Projection &p_projection, float *r_values);
-	void _dispatch(Mode p_mode, RID p_source, RID p_depth, RID p_destination, const Size2i &p_size, int p_source_mip, const Projection &p_projection);
+	void _dispatch(Mode p_mode, RID p_source, RID p_depth, RID p_destination, const Size2i &p_size, int p_source_mip, int p_coarsest_mip, const Projection &p_projection);
 
 public:
 	SSDM();

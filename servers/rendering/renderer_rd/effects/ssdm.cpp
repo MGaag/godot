@@ -78,7 +78,7 @@ RID SSDM::get_displacement_framebuffer(const Ref<RenderSceneBuffersRD> &p_render
 	return FramebufferCacheRD::get_singleton()->get_cache_multiview(p_render_buffers->get_view_count(), p_render_buffers->get_texture(RB_SCOPE_SSDM, RB_SSDM_DISPLACEMENT), p_render_buffers->get_depth_texture());
 }
 
-void SSDM::_dispatch(Mode p_mode, RID p_source, RID p_depth, RID p_destination, const Size2i &p_size, int p_source_mip, const Projection &p_projection) {
+void SSDM::_dispatch(Mode p_mode, RID p_source, RID p_depth, RID p_destination, const Size2i &p_size, int p_source_mip, int p_coarsest_mip, const Projection &p_projection) {
 	MaterialStorage *material_storage = MaterialStorage::get_singleton();
 	UniformSetCacheRD *cache = UniformSetCacheRD::get_singleton();
 	RID sampler = material_storage->sampler_rd_get_default(RSE::CANVAS_ITEM_TEXTURE_FILTER_LINEAR, RSE::CANVAS_ITEM_TEXTURE_REPEAT_DISABLED);
@@ -91,6 +91,7 @@ void SSDM::_dispatch(Mode p_mode, RID p_source, RID p_depth, RID p_destination, 
 	pc.size[1] = p_size.y;
 	pc.source_mip = p_source_mip;
 	pc.refinement_steps = refinement_steps;
+	pc.coarsest_mip = p_coarsest_mip;
 	RD::Uniform projection_data(RD::UNIFORM_TYPE_UNIFORM_BUFFER, 0, projection_buffer);
 	RD::ComputeListID list = RD::get_singleton()->compute_list_begin();
 	RD::get_singleton()->compute_list_bind_compute_pipeline(list, pipelines[p_mode]);
@@ -115,20 +116,25 @@ void SSDM::process(const Ref<RenderSceneBuffersRD> &p_render_buffers, const Proj
 	const uint32_t usage = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_STORAGE_BIT;
 	if (!p_render_buffers->has_texture(RB_SCOPE_SSDM, RB_SSDM_VECTORS)) {
 		p_render_buffers->create_texture(RB_SCOPE_SSDM, RB_SSDM_VECTORS, RD::DATA_FORMAT_R16G16B16A16_SFLOAT, usage, RD::TEXTURE_SAMPLES_1, size, 1, mipmaps);
-		p_render_buffers->create_texture(RB_SCOPE_SSDM, RB_SSDM_MAPPING, RD::DATA_FORMAT_R16G16_SFLOAT, usage, RD::TEXTURE_SAMPLES_1, size);
+		p_render_buffers->create_texture(RB_SCOPE_SSDM, RB_SSDM_MAPPING, RD::DATA_FORMAT_R16G16_SFLOAT, usage, RD::TEXTURE_SAMPLES_1, size, 1, mipmaps);
 	}
 	RID displacement = p_render_buffers->get_texture(RB_SCOPE_SSDM, RB_SSDM_DISPLACEMENT);
 	RID depth = p_render_buffers->get_depth_texture();
 	RID vectors = p_render_buffers->get_texture(RB_SCOPE_SSDM, RB_SSDM_VECTORS);
-	_dispatch(MODE_PROJECT, displacement, depth, p_render_buffers->get_texture_slice(RB_SCOPE_SSDM, RB_SSDM_VECTORS, 0, 0), size, 0, p_projection);
+	_dispatch(MODE_PROJECT, displacement, depth, p_render_buffers->get_texture_slice(RB_SCOPE_SSDM, RB_SSDM_VECTORS, 0, 0), size, 0, mipmaps - 1, p_projection);
 	for (uint32_t mip = 1; mip < mipmaps; mip++) {
 		Size2i mip_size(MAX(1, size.x >> mip), MAX(1, size.y >> mip));
 		RID source_mip = p_render_buffers->get_texture_slice(RB_SCOPE_SSDM, RB_SSDM_VECTORS, 0, mip - 1);
 		RID destination_mip = p_render_buffers->get_texture_slice(RB_SCOPE_SSDM, RB_SSDM_VECTORS, 0, mip);
-		_dispatch(MODE_DOWNSAMPLE, source_mip, depth, destination_mip, mip_size, 0, p_projection);
+		_dispatch(MODE_DOWNSAMPLE, source_mip, depth, destination_mip, mip_size, 0, mipmaps - 1, p_projection);
 	}
 	RID mapping = p_render_buffers->get_texture(RB_SCOPE_SSDM, RB_SSDM_MAPPING);
-	_dispatch(MODE_SOLVE, vectors, depth, mapping, size, mipmaps - 1, p_projection);
+	for (int32_t mip = int32_t(mipmaps) - 1; mip >= 0; mip--) {
+		Size2i mip_size(MAX(1, size.x >> mip), MAX(1, size.y >> mip));
+		RID previous_mapping = mip == int32_t(mipmaps) - 1 ? depth : p_render_buffers->get_texture_slice(RB_SCOPE_SSDM, RB_SSDM_MAPPING, 0, mip + 1);
+		RID destination_mapping = p_render_buffers->get_texture_slice(RB_SCOPE_SSDM, RB_SSDM_MAPPING, 0, mip);
+		_dispatch(MODE_SOLVE, vectors, previous_mapping, destination_mapping, mip_size, mip, mipmaps - 1, p_projection);
+	}
 	if (!p_render_buffers->has_texture(RB_SCOPE_SSDM, RB_SSDM_COLOR)) {
 		p_render_buffers->create_texture(RB_SCOPE_SSDM, RB_SSDM_COLOR, RD::DATA_FORMAT_A2B10G10R10_UNORM_PACK32, RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT, RD::TEXTURE_SAMPLES_1, size);
 	}
@@ -138,14 +144,14 @@ void SSDM::process(const Ref<RenderSceneBuffersRD> &p_render_buffers, const Proj
 	if (!p_render_buffers->has_texture(RB_SCOPE_SSDM, RB_SSDM_DEPTH)) {
 		p_render_buffers->create_texture(RB_SCOPE_SSDM, RB_SSDM_DEPTH, RD::DATA_FORMAT_R32_SFLOAT, usage, RD::TEXTURE_SAMPLES_1, size);
 	}
-	_dispatch(MODE_WARP_DEPTH, vectors, mapping, p_render_buffers->get_texture(RB_SCOPE_SSDM, RB_SSDM_DEPTH), size, 0, p_projection);
+	_dispatch(MODE_WARP_DEPTH, vectors, mapping, p_render_buffers->get_texture(RB_SCOPE_SSDM, RB_SSDM_DEPTH), size, 0, mipmaps - 1, p_projection);
 	if (p_render_buffers->has_velocity_buffer(false)) {
 		if (!p_render_buffers->has_texture(RB_SCOPE_SSDM, RB_SSDM_VELOCITY)) {
 			p_render_buffers->create_texture(RB_SCOPE_SSDM, RB_SSDM_VELOCITY, RD::DATA_FORMAT_R16G16_SFLOAT, usage, RD::TEXTURE_SAMPLES_1, size);
 		}
 		RID velocity = p_render_buffers->get_velocity_buffer(false);
 		RID warped_velocity = p_render_buffers->get_texture(RB_SCOPE_SSDM, RB_SSDM_VELOCITY);
-		_dispatch(MODE_WARP_VELOCITY, velocity, mapping, warped_velocity, size, 0, p_projection);
+		_dispatch(MODE_WARP_VELOCITY, velocity, mapping, warped_velocity, size, 0, mipmaps - 1, p_projection);
 		RD::get_singleton()->texture_copy(warped_velocity, velocity, Vector3(), Vector3(), Vector3(size.x, size.y, 1), 0, 0, 0, 0);
 	}
 }
