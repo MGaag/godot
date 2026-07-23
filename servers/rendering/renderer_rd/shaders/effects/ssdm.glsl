@@ -14,7 +14,6 @@ layout(push_constant, std430) uniform Params
 {
 	ivec2 size;
 	int source_mip;
-	int refinement_steps;
 	int coarsest_mip;
 } params;
 
@@ -148,6 +147,25 @@ void main()
 
 
 #ifdef MODE_SOLVE
+// Average four samples at the corners of the current mip texel. The half-texel
+// offsets are important: filtered samples include the estimate's local source
+// neighborhood, which is the barycenter construction described by the paper.
+vec2 sample_barycenter_displacement(vec2 source_uv, vec2 half_texel)
+{
+	vec2 sample_uv_00 = clamp(source_uv + vec2(-half_texel.x, -half_texel.y), vec2(0.0), vec2(1.0));
+	vec2 sample_uv_10 = clamp(source_uv + vec2(half_texel.x, -half_texel.y), vec2(0.0), vec2(1.0));
+	vec2 sample_uv_01 = clamp(source_uv + vec2(-half_texel.x, half_texel.y), vec2(0.0), vec2(1.0));
+	vec2 sample_uv_11 = clamp(source_uv + vec2(half_texel.x, half_texel.y), vec2(0.0), vec2(1.0));
+
+	vec2 average_displacement = textureLod(source, sample_uv_00, float(params.source_mip)).rg;
+	average_displacement += textureLod(source, sample_uv_10, float(params.source_mip)).rg;
+	average_displacement += textureLod(source, sample_uv_01, float(params.source_mip)).rg;
+	average_displacement += textureLod(source, sample_uv_11, float(params.source_mip)).rg;
+	return average_displacement * 0.25;
+}
+
+
+
 // Follow the 2008 SSDM paper's coarse-to-fine barycenter search. Each mip takes
 // four displacement samples around the current source estimate, averages them,
 // and carries the corrected estimate into the next finer level of pyramid B.
@@ -171,33 +189,17 @@ void main()
 
 	vec2 half_texel = 0.5 / vec2(params.size);
 
-	// One iteration is exactly the four-sample barycenter step described by the
-	// paper. Extra iterations repeat that same step around the corrected source
-	// estimate; they do not introduce a separate Newton or Jacobian solve.
-	for (int refinement_step = 0; refinement_step < params.refinement_steps; refinement_step++)
+	// Refinement happens by descending the mip pyramid, not by repeatedly
+	// sampling one level. The next finer dispatch reuses this result with a
+	// smaller texel footprint and therefore a more precise source neighborhood.
+	vec2 average_displacement = sample_barycenter_displacement(source_uv, half_texel);
+
+	// Pyramid A stores source-to-target displacement. Inverting it therefore
+	// subtracts the averaged vector from the target to estimate its source.
+	vec2 proposed_source_uv = target_uv - average_displacement;
+	if (finite_vec2(proposed_source_uv))
 	{
-		// Sampling at the four corners mixes the current texel with its neighbors,
-		// matching the paper's smp00, smp10, smp01, and smp11 construction.
-		vec2 sample_uv_00 = clamp(source_uv + vec2(-half_texel.x, -half_texel.y), vec2(0.0), vec2(1.0));
-		vec2 sample_uv_10 = clamp(source_uv + vec2(half_texel.x, -half_texel.y), vec2(0.0), vec2(1.0));
-		vec2 sample_uv_01 = clamp(source_uv + vec2(-half_texel.x, half_texel.y), vec2(0.0), vec2(1.0));
-		vec2 sample_uv_11 = clamp(source_uv + vec2(half_texel.x, half_texel.y), vec2(0.0), vec2(1.0));
-
-		vec2 average_displacement = textureLod(source, sample_uv_00, float(params.source_mip)).rg;
-		average_displacement += textureLod(source, sample_uv_10, float(params.source_mip)).rg;
-		average_displacement += textureLod(source, sample_uv_01, float(params.source_mip)).rg;
-		average_displacement += textureLod(source, sample_uv_11, float(params.source_mip)).rg;
-		average_displacement *= 0.25;
-
-		// Pyramid A stores source-to-target displacement. Inverting it therefore
-		// subtracts the averaged vector from the target to estimate its source.
-		vec2 corrected_source_uv = target_uv - average_displacement;
-		if (!finite_vec2(corrected_source_uv))
-		{
-			break;
-		}
-
-		source_uv = clamp(corrected_source_uv, vec2(0.0), vec2(1.0));
+		source_uv = clamp(proposed_source_uv, vec2(0.0), vec2(1.0));
 	}
 
 	// Store an offset rather than an absolute UV. Zero remains the identity map

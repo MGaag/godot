@@ -42,11 +42,12 @@ SSDM::SSDM() {
 	depth_pipeline.setup(depth_shader.version_get_shader(depth_shader_version, 0), RD::RENDER_PRIMITIVE_TRIANGLES, RD::PipelineRasterizationState(), RD::PipelineMultisampleState(), depth_state, RD::PipelineColorBlendState::create_disabled(), 0);
 
 	GLOBAL_DEF("rendering/renderer/ssdm/enabled", false);
-	GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/renderer/ssdm/max_mipmaps", PROPERTY_HINT_RANGE, "2,8,1"), 6);
-	GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/renderer/ssdm/refinement_steps", PROPERTY_HINT_RANGE, "1,4,1"), 1);
+	// The original SSDM paper recommends a short three-to-four-level pyramid.
+	// Going substantially coarser can average silhouette displacement into the
+	// zero-displacement background and lose the detail needed by the inverse map.
+	GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/renderer/ssdm/max_mipmaps", PROPERTY_HINT_RANGE, "2,8,1"), 4);
 	ProjectSettings::get_singleton()->set_as_basic("rendering/renderer/ssdm/enabled", true);
 	ProjectSettings::get_singleton()->set_as_basic("rendering/renderer/ssdm/max_mipmaps", true);
-	ProjectSettings::get_singleton()->set_as_basic("rendering/renderer/ssdm/refinement_steps", true);
 }
 
 SSDM::~SSDM() {
@@ -100,7 +101,6 @@ void SSDM::_dispatch(Mode p_mode, RID p_source, RID p_depth, RID p_destination, 
 	pc.size[0] = p_size.x;
 	pc.size[1] = p_size.y;
 	pc.source_mip = p_source_mip;
-	pc.refinement_steps = refinement_steps;
 	pc.coarsest_mip = p_coarsest_mip;
 	RD::Uniform projection_data(RD::UNIFORM_TYPE_UNIFORM_BUFFER, 0, projection_buffer);
 	RD::ComputeListID list = RD::get_singleton()->compute_list_begin();
@@ -117,7 +117,6 @@ void SSDM::process(const Ref<RenderSceneBuffersRD> &p_render_buffers, const Proj
 	ERR_FAIL_COND(p_render_buffers.is_null());
 	const Size2i size = p_render_buffers->get_internal_size();
 	max_mipmaps = GLOBAL_GET("rendering/renderer/ssdm/max_mipmaps");
-	refinement_steps = GLOBAL_GET("rendering/renderer/ssdm/refinement_steps");
 	ProjectionData projection_data;
 	_store_projection(p_projection, projection_data.projection);
 	_store_projection(p_projection.inverse(), projection_data.inv_projection);

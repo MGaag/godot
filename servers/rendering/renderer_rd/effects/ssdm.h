@@ -24,7 +24,6 @@ class SSDM {
 	struct PushConstant {
 		int32_t size[2];
 		int32_t source_mip;
-		int32_t refinement_steps;
 		int32_t coarsest_mip;
 	};
 	struct ProjectionData {
@@ -40,8 +39,7 @@ class SSDM {
 	SsdmDepthShaderRD depth_shader;
 	RID depth_shader_version;
 	PipelineCacheRD depth_pipeline;
-	int max_mipmaps = 6;
-	int refinement_steps = 1;
+	int max_mipmaps = 4;
 
 	static void _store_projection(const Projection &p_projection, float *r_values);
 	void _dispatch(Mode p_mode, RID p_source, RID p_depth, RID p_destination, const Size2i &p_size, int p_source_mip, int p_coarsest_mip, const Projection &p_projection);
