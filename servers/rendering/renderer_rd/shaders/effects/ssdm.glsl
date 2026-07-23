@@ -4,22 +4,35 @@
 
 #VERSION_DEFINES
 
+// One shader source implements every SSDM compute stage. Shader variants select
+// exactly one MODE_* block below.
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-layout(push_constant, std430) uniform Params {
+// Dispatches are rounded up to the 8x8 workgroup size, so every main function
+// must reject invocations outside size.
+layout(push_constant, std430) uniform Params
+{
 	ivec2 size;
 	int source_mip;
 	int refinement_steps;
 	int coarsest_mip;
 } params;
 
-layout(set = 2, binding = 0, std140) uniform ProjectionData {
+// Projection data has a stable descriptor set across SSDM variants. Material
+// displacement itself is stored in normalized screen UV coordinates.
+layout(set = 2, binding = 0, std140) uniform ProjectionData
+{
 	mat4 projection;
 	mat4 inv_projection;
 } projection_data;
 
+// Binding meaning varies by MODE_*: source is the value being transformed,
+// while depth_texture supplies scene depth or a previously solved mapping.
 layout(set = 0, binding = 0) uniform sampler2D source;
 layout(set = 0, binding = 1) uniform sampler2D depth_texture;
+
+// Formats must match the destination textures allocated in SSDM::_dispatch().
+// Update the C++ allocation and this declaration together.
 #ifdef MODE_WARP_COLOR
 layout(rgb10_a2, set = 1, binding = 0) uniform restrict writeonly image2D destination;
 #elif defined(MODE_WARP_DEPTH)
@@ -30,122 +43,207 @@ layout(rg16f, set = 1, binding = 0) uniform restrict writeonly image2D destinati
 layout(rgba16f, set = 1, binding = 0) uniform restrict writeonly image2D destination;
 #endif
 
+// Project a view-space position into normalized screen UV coordinates using
+// the renderer's corrected projection.
+vec2 project_view(vec3 position)
+{
+	vec4 clip_position = projection_data.projection * vec4(position, 1.0);
+	return clip_position.xy / clip_position.w * 0.5 + 0.5;
+}
+
+
+
+// Invalid values spread through mip averaging, so reject them before they can
+// corrupt a larger portion of the mapping pyramid.
+bool finite_vec2(vec2 value)
+{
+	return !any(isnan(value)) && !any(isinf(value));
+}
+
+
+
+// Packed SSDM stages can use this variant when all four channels need checking.
+bool finite_vec4(vec4 value)
+{
+	return !any(isnan(value)) && !any(isinf(value));
+}
+
+
+
 #ifdef MODE_WARP_VELOCITY
-void main() {
+// Resample velocity through the completed inverse map so temporal effects use
+// the same visible source point as displaced color and depth.
+void main()
+{
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-	if (any(greaterThanEqual(pixel, params.size))) return;
+	if (any(greaterThanEqual(pixel, params.size)))
+	{
+		return;
+	}
+
 	vec2 target_uv = (vec2(pixel) + 0.5) / vec2(params.size);
-	vec2 source_uv = clamp(target_uv + texelFetch(depth_texture, pixel, 0).rg, vec2(0.0), vec2(1.0));
+	vec2 mapping_offset = texelFetch(depth_texture, pixel, 0).rg;
+	vec2 source_uv = clamp(target_uv + mapping_offset, vec2(0.0), vec2(1.0));
+
 	imageStore(destination, pixel, textureLod(source, source_uv, 0.0));
 }
 #endif
 
-vec2 project_view(vec3 p) {
-	vec4 clip = projection_data.projection * vec4(p, 1.0);
-	return clip.xy / clip.w * 0.5 + 0.5;
-}
 
-bool finite_vec2(vec2 value) {
-	return !any(isnan(value)) && !any(isinf(value));
-}
-
-bool finite_vec4(vec4 value) {
-	return !any(isnan(value)) && !any(isinf(value));
-}
 
 #ifdef MODE_PROJECT
-void main() {
+// Pack material displacement and source depth into the base pyramid level. XY
+// is source-to-target UV displacement and Z remains attached source depth.
+void main()
+{
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-	if (any(greaterThanEqual(pixel, params.size))) return;
+	if (any(greaterThanEqual(pixel, params.size)))
+	{
+		return;
+	}
+
 	float depth = texelFetch(depth_texture, pixel, 0).r;
 	vec2 displacement = texelFetch(source, pixel, 0).rg;
+
 	// Materials emit the source-to-target offset directly in normalized screen
 	// UV coordinates. Zero is the identity mapping for both geometry and the
 	// unwritten background; depth follows the source pixel during the gather.
-	if (!finite_vec2(displacement)) {
+	if (!finite_vec2(displacement))
+	{
 		imageStore(destination, pixel, vec4(0.0, 0.0, depth, 1.0));
 		return;
 	}
+
 	imageStore(destination, pixel, vec4(displacement, depth, 1.0));
 }
 #endif
 
+
+
 #ifdef MODE_DOWNSAMPLE
-void main() {
+// Average clamped 2x2 neighborhoods to build the coarse displacement pyramid.
+// Coarse levels give the inverse solve a stable starting estimate.
+void main()
+{
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-	if (any(greaterThanEqual(pixel, params.size))) return;
-	ivec2 p = pixel * 2;
+	if (any(greaterThanEqual(pixel, params.size)))
+	{
+		return;
+	}
+
+	ivec2 source_pixel = pixel * 2;
 	ivec2 source_max = textureSize(source, params.source_mip) - 1;
-	vec2 v = texelFetch(source, p, params.source_mip).rg;
-	v += texelFetch(source, min(p + ivec2(1, 0), source_max), params.source_mip).rg;
-	v += texelFetch(source, min(p + ivec2(0, 1), source_max), params.source_mip).rg;
-	v += texelFetch(source, min(p + ivec2(1, 1), source_max), params.source_mip).rg;
-	imageStore(destination, pixel, vec4(v * 0.25, 0.0, 0.0));
+
+	// Clamp edge taps because odd-sized mip levels may not have a complete
+	// source neighborhood.
+	vec2 displacement_sum = texelFetch(source, source_pixel, params.source_mip).rg;
+	displacement_sum += texelFetch(source, min(source_pixel + ivec2(1, 0), source_max), params.source_mip).rg;
+	displacement_sum += texelFetch(source, min(source_pixel + ivec2(0, 1), source_max), params.source_mip).rg;
+	displacement_sum += texelFetch(source, min(source_pixel + ivec2(1, 1), source_max), params.source_mip).rg;
+
+	imageStore(destination, pixel, vec4(displacement_sum * 0.25, 0.0, 0.0));
 }
 #endif
 
-#ifdef MODE_SOLVE
-vec2 bilerp(vec2 p00, vec2 p10, vec2 p01, vec2 p11, vec2 uv) {
-	return mix(mix(p00, p10, uv.x), mix(p01, p11, uv.x), uv.y);
-}
 
-void main() {
+
+#ifdef MODE_SOLVE
+// Follow the 2008 SSDM paper's coarse-to-fine barycenter search. Each mip takes
+// four displacement samples around the current source estimate, averages them,
+// and carries the corrected estimate into the next finer level of pyramid B.
+void main()
+{
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-	if (any(greaterThanEqual(pixel, params.size))) return;
+	if (any(greaterThanEqual(pixel, params.size)))
+	{
+		return;
+	}
+
 	vec2 target_uv = (vec2(pixel) + 0.5) / vec2(params.size);
-	vec2 source_uv = params.source_mip == params.coarsest_mip ? target_uv : target_uv + textureLod(depth_texture, target_uv, 0.0).rg;
+
+	// The coarsest level starts from identity. Finer levels add the inverse-map
+	// offset found by the preceding, coarser solve.
+	vec2 source_uv = target_uv;
+	if (params.source_mip != params.coarsest_mip)
+	{
+		source_uv += textureLod(depth_texture, target_uv, 0.0).rg;
+	}
+
 	vec2 half_texel = 0.5 / vec2(params.size);
-	for (int iteration = 0; iteration < params.refinement_steps; iteration++) {
-		vec2 previous_source_uv = source_uv;
-		vec2 q00 = clamp(source_uv + vec2(-half_texel.x, -half_texel.y), vec2(0.0), vec2(1.0));
-		vec2 q10 = clamp(source_uv + vec2( half_texel.x, -half_texel.y), vec2(0.0), vec2(1.0));
-		vec2 q01 = clamp(source_uv + vec2(-half_texel.x,  half_texel.y), vec2(0.0), vec2(1.0));
-		vec2 q11 = clamp(source_uv + vec2( half_texel.x,  half_texel.y), vec2(0.0), vec2(1.0));
-		vec2 t00 = q00 + textureLod(source, q00, float(params.source_mip)).rg;
-		vec2 t10 = q10 + textureLod(source, q10, float(params.source_mip)).rg;
-		vec2 t01 = q01 + textureLod(source, q01, float(params.source_mip)).rg;
-		vec2 t11 = q11 + textureLod(source, q11, float(params.source_mip)).rg;
-		vec2 local_uv = vec2(0.5);
-		for (int inverse_iteration = 0; inverse_iteration < 3; inverse_iteration++) {
-			vec2 residual = bilerp(t00, t10, t01, t11, local_uv) - target_uv;
-			vec2 derivative_u = mix(t10 - t00, t11 - t01, local_uv.y);
-			vec2 derivative_v = mix(t01 - t00, t11 - t10, local_uv.x);
-			float determinant = derivative_u.x * derivative_v.y - derivative_u.y * derivative_v.x;
-			if (abs(determinant) < 1e-10) {
-				break;
-			}
-			local_uv -= vec2(
-					residual.x * derivative_v.y - residual.y * derivative_v.x,
-					derivative_u.x * residual.y - derivative_u.y * residual.x) /
-					determinant;
-		}
-		source_uv = clamp(bilerp(q00, q10, q01, q11, local_uv), vec2(0.0), vec2(1.0));
-		if (!finite_vec2(source_uv)) {
-			source_uv = previous_source_uv;
+
+	// One iteration is exactly the four-sample barycenter step described by the
+	// paper. Extra iterations repeat that same step around the corrected source
+	// estimate; they do not introduce a separate Newton or Jacobian solve.
+	for (int refinement_step = 0; refinement_step < params.refinement_steps; refinement_step++)
+	{
+		// Sampling at the four corners mixes the current texel with its neighbors,
+		// matching the paper's smp00, smp10, smp01, and smp11 construction.
+		vec2 sample_uv_00 = clamp(source_uv + vec2(-half_texel.x, -half_texel.y), vec2(0.0), vec2(1.0));
+		vec2 sample_uv_10 = clamp(source_uv + vec2(half_texel.x, -half_texel.y), vec2(0.0), vec2(1.0));
+		vec2 sample_uv_01 = clamp(source_uv + vec2(-half_texel.x, half_texel.y), vec2(0.0), vec2(1.0));
+		vec2 sample_uv_11 = clamp(source_uv + vec2(half_texel.x, half_texel.y), vec2(0.0), vec2(1.0));
+
+		vec2 average_displacement = textureLod(source, sample_uv_00, float(params.source_mip)).rg;
+		average_displacement += textureLod(source, sample_uv_10, float(params.source_mip)).rg;
+		average_displacement += textureLod(source, sample_uv_01, float(params.source_mip)).rg;
+		average_displacement += textureLod(source, sample_uv_11, float(params.source_mip)).rg;
+		average_displacement *= 0.25;
+
+		// Pyramid A stores source-to-target displacement. Inverting it therefore
+		// subtracts the averaged vector from the target to estimate its source.
+		vec2 corrected_source_uv = target_uv - average_displacement;
+		if (!finite_vec2(corrected_source_uv))
+		{
 			break;
 		}
+
+		source_uv = clamp(corrected_source_uv, vec2(0.0), vec2(1.0));
 	}
+
+	// Store an offset rather than an absolute UV. Zero remains the identity map
+	// and consumers can add the result directly to their target UV.
 	imageStore(destination, pixel, vec4(source_uv - target_uv, 0.0, 0.0));
 }
 #endif
 
+
+
 #ifdef MODE_WARP_COLOR
-void main() {
+// Gather color from the source position selected by the inverse mapping.
+void main()
+{
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-	if (any(greaterThanEqual(pixel, params.size))) return;
+	if (any(greaterThanEqual(pixel, params.size)))
+	{
+		return;
+	}
+
 	vec2 target_uv = (vec2(pixel) + 0.5) / vec2(params.size);
-	vec2 source_uv = clamp(target_uv + texelFetch(depth_texture, pixel, 0).rg, vec2(0.0), vec2(1.0));
+	vec2 mapping_offset = texelFetch(depth_texture, pixel, 0).rg;
+	vec2 source_uv = clamp(target_uv + mapping_offset, vec2(0.0), vec2(1.0));
+
 	imageStore(destination, pixel, textureLod(source, source_uv, 0.0));
 }
 #endif
 
+
+
 #ifdef MODE_WARP_DEPTH
-void main() {
+// Gather depth from the same visible source position used for color. The base
+// pyramid keeps source depth in B while XY contains displacement.
+void main()
+{
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-	if (any(greaterThanEqual(pixel, params.size))) return;
+	if (any(greaterThanEqual(pixel, params.size)))
+	{
+		return;
+	}
+
 	vec2 target_uv = (vec2(pixel) + 0.5) / vec2(params.size);
-	vec2 source_uv = clamp(target_uv + texelFetch(depth_texture, pixel, 0).rg, vec2(0.0), vec2(1.0));
+	vec2 mapping_offset = texelFetch(depth_texture, pixel, 0).rg;
+	vec2 source_uv = clamp(target_uv + mapping_offset, vec2(0.0), vec2(1.0));
 	float target_depth = textureLod(source, source_uv, 0.0).b;
+
 	imageStore(destination, pixel, vec4(target_depth));
 }
 #endif

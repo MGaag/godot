@@ -41,7 +41,7 @@ class SSDM {
 	RID depth_shader_version;
 	PipelineCacheRD depth_pipeline;
 	int max_mipmaps = 6;
-	int refinement_steps = 2;
+	int refinement_steps = 1;
 
 	static void _store_projection(const Projection &p_projection, float *r_values);
 	void _dispatch(Mode p_mode, RID p_source, RID p_depth, RID p_destination, const Size2i &p_size, int p_source_mip, int p_coarsest_mip, const Projection &p_projection);
