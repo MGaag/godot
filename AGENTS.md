@@ -74,3 +74,17 @@ Before considering work complete:
 -   Check for new compiler warnings or errors.
 -   Summarize what changed and why.
 -   Mention assumptions, limitations, and recommended next steps.
+
+## Local Build Environment
+
+-   The optional AccessKit, Direct3D 12, and ANGLE dependency packages are not
+    installed locally. Disable those drivers explicitly when building instead
+    of allowing SCons to stop during configuration:
+
+    ```powershell
+    scons platform=windows target=editor dev_build=yes accesskit=no d3d12=no angle=no -j6
+    ```
+
+-   A running `godot.windows.editor.dev.x86_64.exe` locks the editor executable
+    and prevents SCons from completing the final link. Close the running editor
+    before a validation build that needs to replace the executable.
