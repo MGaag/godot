@@ -1081,6 +1081,100 @@
 				Sets the texture [param repeat] mode to use for the canvas texture specified by the [param canvas_texture] RID.
 			</description>
 		</method>
+		<method name="cell_light_probe_grid_configure">
+			<return type="void" />
+			<param index="0" name="grid" type="RID" />
+			<param index="1" name="probe_count" type="int" />
+			<param index="2" name="layer_count" type="int" />
+			<param index="3" name="dimensions" type="Vector3i" />
+			<param index="4" name="origin" type="Vector3" />
+			<param index="5" name="cell_size" type="Vector3" />
+			<description>
+				Allocates storage for [param probe_count] probes and [param layer_count] lighting contribution layers, and defines the regular cell grid used for receiver lookup. [param dimensions] is the number of cells along each axis, [param origin] is the center of cell [code](0, 0, 0)[/code], and [param cell_size] is the world-space size of one cell.
+			</description>
+		</method>
+		<method name="cell_light_probe_grid_create">
+			<return type="RID" />
+			<description>
+				Creates a cell light probe grid. Configure it with [method cell_light_probe_grid_configure], attach it to an environment with [method environment_set_cell_light_probe_grid], and free it with [method free_rid] when no longer needed.
+			</description>
+		</method>
+		<method name="cell_light_probe_grid_debug_get_resolved_sh" qualifiers="const">
+			<return type="PackedColorArray" />
+			<param index="0" name="grid" type="RID" />
+			<description>
+				Returns the currently published spherical harmonic coefficients for debugging. Nine consecutive colors describe one probe. This readback is intended for diagnostics and visual tests, not per-frame gameplay code.
+			</description>
+		</method>
+		<method name="cell_light_probe_grid_get_capture_generation" qualifiers="const">
+			<return type="int" />
+			<param index="0" name="grid" type="RID" />
+			<description>
+				Returns a monotonically increasing counter of completed probe captures. Resolving resident contribution layers does not change this counter.
+			</description>
+		</method>
+		<method name="cell_light_probe_grid_get_pending_capture_count" qualifiers="const">
+			<return type="int" />
+			<param index="0" name="grid" type="RID" />
+			<description>
+				Returns the number of queued or in-progress captures belonging to [param grid].
+			</description>
+		</method>
+		<method name="cell_light_probe_grid_get_resolve_generation" qualifiers="const">
+			<return type="int" />
+			<param index="0" name="grid" type="RID" />
+			<description>
+				Returns a monotonically increasing counter of coherently published resolved fields.
+			</description>
+		</method>
+		<method name="cell_light_probe_grid_is_supported" qualifiers="const">
+			<return type="bool" />
+			<description>
+				Returns [code]true[/code] when the active rendering method supports cell light probes. Cell light probes are currently supported by the Mobile rendering method only.
+			</description>
+		</method>
+		<method name="cell_light_probe_grid_queue_capture">
+			<return type="void" />
+			<param index="0" name="grid" type="RID" />
+			<param index="1" name="scenario" type="RID" />
+			<param index="2" name="probe" type="int" />
+			<param index="3" name="layer" type="int" />
+			<param index="4" name="position" type="Vector3" />
+			<param index="5" name="max_distance" type="float" />
+			<param index="6" name="cull_mask" type="int" />
+			<param index="7" name="shadows" type="bool" />
+			<param index="8" name="graph_distance" type="int" />
+			<param index="9" name="player_distance" type="int" />
+			<param index="10" name="active_layer" type="bool" />
+			<param index="11" name="excluded_lights" type="RID[]" />
+			<description>
+				Queues a cubemap capture from [param position] in [param scenario], then convolves it into diffuse spherical harmonics for the requested [param probe] and contribution [param layer]. Queue priority favors lower [param graph_distance], then lower [param player_distance], then active layers. Requeueing the same probe and layer replaces its pending request. Lights in [param excluded_lights] do not contribute to the capture.
+			</description>
+		</method>
+		<method name="cell_light_probe_grid_resolve">
+			<return type="void" />
+			<param index="0" name="grid" type="RID" />
+			<param index="1" name="layer_weights" type="PackedFloat32Array" />
+			<description>
+				Combines the captured contribution layers using [param layer_weights] and atomically publishes the resulting probe field to receivers. The array must contain one weight for each configured layer.
+			</description>
+		</method>
+		<method name="cell_light_probe_grid_set_cell_indices">
+			<return type="void" />
+			<param index="0" name="grid" type="RID" />
+			<param index="1" name="cell_indices" type="PackedInt32Array" />
+			<description>
+				Maps every regular grid cell to a probe index. Use [code]-1[/code] for cells without a probe. The array size must equal the product of the configured grid dimensions.
+			</description>
+		</method>
+		<method name="cell_light_probe_grid_set_edge_transmissibility">
+			<return type="void" />
+			<param index="0" name="grid" type="RID" />
+			<param index="1" name="edge_transmissibility" type="PackedFloat32Array" />
+			<description>
+				Sets how much indirect light may interpolate across each cell's horizontal edges. Four consecutive values describe the negative X, positive X, negative Z, and positive Z edges of one cell. Values range from [code]0.0[/code] for a closed wall to [code]1.0[/code] for a fully open edge.
+			</description>
+		</method>
 		<method name="compositor_create">
 			<return type="RID" />
 			<description>
@@ -1351,6 +1445,23 @@
 			<param index="1" name="max_layer" type="int" />
 			<description>
 				Sets the maximum layer to use if using Canvas background mode.
+			</description>
+		</method>
+		<method name="environment_set_cell_light_probe_grid">
+			<return type="void" />
+			<param index="0" name="environment" type="RID" />
+			<param index="1" name="grid" type="RID" />
+			<description>
+				Attaches a cell light probe [param grid] to [param environment]. Pass an empty [RID] to detach the current grid. The grid contributes only while cell light probes are enabled with [method environment_set_cell_light_probes].
+			</description>
+		</method>
+		<method name="environment_set_cell_light_probes">
+			<return type="void" />
+			<param index="0" name="environment" type="RID" />
+			<param index="1" name="enable" type="bool" />
+			<param index="2" name="energy" type="float" />
+			<description>
+				Enables or disables cell light probes for [param environment] and sets their diffuse indirect-light energy multiplier. Equivalent to [member Environment.cell_light_probes_enabled] and [member Environment.cell_light_probes_energy].
 			</description>
 		</method>
 		<method name="environment_set_fog">

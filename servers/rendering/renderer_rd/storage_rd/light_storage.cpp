@@ -1607,6 +1607,12 @@ int LightStorage::reflection_atlas_get_size(RID p_ref_atlas) const {
 	return ra->size;
 }
 
+RID LightStorage::reflection_atlas_get_capture_cubemap(RID p_ref_atlas) const {
+	const ReflectionAtlas *atlas = reflection_atlas_owner.get_or_null(p_ref_atlas);
+	ERR_FAIL_NULL_V(atlas, RID());
+	return atlas->color_buffer;
+}
+
 /* REFLECTION PROBE INSTANCE */
 
 RID LightStorage::reflection_probe_instance_create(RID p_probe) {

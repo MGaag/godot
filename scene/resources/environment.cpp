@@ -603,6 +603,29 @@ void Environment::_update_sdfgi() {
 			sdfgi_probe_bias);
 }
 
+void Environment::set_cell_light_probes_enabled(bool p_enabled) {
+	cell_light_probes_enabled = p_enabled;
+	_update_cell_light_probes();
+	notify_property_list_changed();
+}
+
+bool Environment::is_cell_light_probes_enabled() const {
+	return cell_light_probes_enabled;
+}
+
+void Environment::set_cell_light_probes_energy(float p_energy) {
+	cell_light_probes_energy = MAX(p_energy, 0.0f);
+	_update_cell_light_probes();
+}
+
+float Environment::get_cell_light_probes_energy() const {
+	return cell_light_probes_energy;
+}
+
+void Environment::_update_cell_light_probes() {
+	RS::get_singleton()->environment_set_cell_light_probes(environment, cell_light_probes_enabled, cell_light_probes_energy);
+}
+
 // Glow
 
 void Environment::set_glow_enabled(bool p_enabled) {
@@ -1108,6 +1131,12 @@ void Environment::_validate_property(PropertyInfo &p_property) const {
 	if (!Engine::get_singleton()->is_editor_hint()) {
 		return;
 	}
+	if (p_property.name.begins_with("cell_light_probes_")) {
+		if (OS::get_singleton()->get_current_rendering_method() != "mobile" || (p_property.name != "cell_light_probes_enabled" && !cell_light_probes_enabled)) {
+			p_property.usage = PROPERTY_USAGE_NO_EDITOR;
+		}
+		return;
+	}
 	if (p_property.name == "sky" || p_property.name == "sky_custom_fov" || p_property.name == "sky_rotation" || p_property.name == "ambient_light_sky_contribution") {
 		if (bg_mode != BG_SKY && ambient_source != AMBIENT_SOURCE_SKY && reflection_source != REFLECTION_SOURCE_SKY) {
 			p_property.usage = PROPERTY_USAGE_NO_EDITOR;
@@ -1430,6 +1459,17 @@ void Environment::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "sdfgi_normal_bias"), "set_sdfgi_normal_bias", "get_sdfgi_normal_bias");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "sdfgi_probe_bias"), "set_sdfgi_probe_bias", "get_sdfgi_probe_bias");
 
+	// Cell light probes
+
+	ClassDB::bind_method(D_METHOD("set_cell_light_probes_enabled", "enabled"), &Environment::set_cell_light_probes_enabled);
+	ClassDB::bind_method(D_METHOD("is_cell_light_probes_enabled"), &Environment::is_cell_light_probes_enabled);
+	ClassDB::bind_method(D_METHOD("set_cell_light_probes_energy", "energy"), &Environment::set_cell_light_probes_energy);
+	ClassDB::bind_method(D_METHOD("get_cell_light_probes_energy"), &Environment::get_cell_light_probes_energy);
+
+	ADD_GROUP("Cell Light Probes", "cell_light_probes_");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "cell_light_probes_enabled", PROPERTY_HINT_GROUP_ENABLE), "set_cell_light_probes_enabled", "is_cell_light_probes_enabled");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "cell_light_probes_energy", PROPERTY_HINT_RANGE, "0,16,0.01,or_greater"), "set_cell_light_probes_energy", "get_cell_light_probes_energy");
+
 	// Glow
 
 	ClassDB::bind_method(D_METHOD("set_glow_enabled", "enabled"), &Environment::set_glow_enabled);
@@ -1654,6 +1694,7 @@ Environment::Environment() {
 	_update_ssao();
 	_update_ssil();
 	_update_sdfgi();
+	_update_cell_light_probes();
 	_update_glow();
 	_update_fog();
 	_update_adjustment();

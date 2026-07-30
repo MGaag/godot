@@ -723,6 +723,20 @@ public:
 	FUNC2(camera_set_compositor, RID, RID)
 	FUNC2(camera_set_use_vertical_aspect, RID, bool)
 
+	/* CELL LIGHT PROBE GRID API */
+
+	FUNC0RC(bool, cell_light_probe_grid_is_supported)
+	FUNCRIDSPLIT(cell_light_probe_grid)
+	FUNC6(cell_light_probe_grid_configure, RID, uint32_t, uint32_t, const Vector3i &, const Vector3 &, const Vector3 &)
+	FUNC2(cell_light_probe_grid_set_cell_indices, RID, const PackedInt32Array &)
+	FUNC2(cell_light_probe_grid_set_edge_transmissibility, RID, const PackedFloat32Array &)
+	FUNC2(cell_light_probe_grid_resolve, RID, const PackedFloat32Array &)
+	FUNC1RC(uint64_t, cell_light_probe_grid_get_capture_generation, RID)
+	FUNC1RC(uint64_t, cell_light_probe_grid_get_resolve_generation, RID)
+	FUNC1RC(PackedColorArray, cell_light_probe_grid_debug_get_resolved_sh, RID)
+	FUNC1RC(uint32_t, cell_light_probe_grid_get_pending_capture_count, RID)
+	FUNC12(cell_light_probe_grid_queue_capture, RID, RID, uint32_t, uint32_t, const Vector3 &, float, uint32_t, bool, uint32_t, uint32_t, bool, const TypedArray<RID> &)
+
 	/* OCCLUDER */
 	FUNCRIDSPLIT(occluder)
 	FUNC3(occluder_set_mesh, RID, const PackedVector3Array &, const PackedInt32Array &)
@@ -857,6 +871,8 @@ public:
 	FUNC3(environment_set_bg_energy, RID, float, float)
 	FUNC2(environment_set_canvas_max_layer, RID, int)
 	FUNC6(environment_set_ambient_light, RID, const Color &, RSE::EnvironmentAmbientSource, float, float, RSE::EnvironmentReflectionSource)
+	FUNC2(environment_set_cell_light_probe_grid, RID, RID)
+	FUNC3(environment_set_cell_light_probes, RID, bool, float)
 
 	FUNC2(environment_set_camera_feed_id, RID, int)
 

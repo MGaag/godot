@@ -2632,6 +2632,20 @@ void RenderingServer::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("reflection_probe_set_resolution", "probe", "resolution"), &RenderingServer::reflection_probe_set_resolution);
 	ClassDB::bind_method(D_METHOD("reflection_probe_set_mesh_lod_threshold", "probe", "pixels"), &RenderingServer::reflection_probe_set_mesh_lod_threshold);
 
+	/* CELL LIGHT PROBE GRID */
+
+	ClassDB::bind_method(D_METHOD("cell_light_probe_grid_is_supported"), &RenderingServer::cell_light_probe_grid_is_supported);
+	ClassDB::bind_method(D_METHOD("cell_light_probe_grid_create"), &RenderingServer::cell_light_probe_grid_create);
+	ClassDB::bind_method(D_METHOD("cell_light_probe_grid_configure", "grid", "probe_count", "layer_count", "dimensions", "origin", "cell_size"), &RenderingServer::cell_light_probe_grid_configure);
+	ClassDB::bind_method(D_METHOD("cell_light_probe_grid_set_cell_indices", "grid", "cell_indices"), &RenderingServer::cell_light_probe_grid_set_cell_indices);
+	ClassDB::bind_method(D_METHOD("cell_light_probe_grid_set_edge_transmissibility", "grid", "edge_transmissibility"), &RenderingServer::cell_light_probe_grid_set_edge_transmissibility);
+	ClassDB::bind_method(D_METHOD("cell_light_probe_grid_resolve", "grid", "layer_weights"), &RenderingServer::cell_light_probe_grid_resolve);
+	ClassDB::bind_method(D_METHOD("cell_light_probe_grid_get_capture_generation", "grid"), &RenderingServer::cell_light_probe_grid_get_capture_generation);
+	ClassDB::bind_method(D_METHOD("cell_light_probe_grid_get_resolve_generation", "grid"), &RenderingServer::cell_light_probe_grid_get_resolve_generation);
+	ClassDB::bind_method(D_METHOD("cell_light_probe_grid_debug_get_resolved_sh", "grid"), &RenderingServer::cell_light_probe_grid_debug_get_resolved_sh);
+	ClassDB::bind_method(D_METHOD("cell_light_probe_grid_get_pending_capture_count", "grid"), &RenderingServer::cell_light_probe_grid_get_pending_capture_count);
+	ClassDB::bind_method(D_METHOD("cell_light_probe_grid_queue_capture", "grid", "scenario", "probe", "layer", "position", "max_distance", "cull_mask", "shadows", "graph_distance", "player_distance", "active_layer", "excluded_lights"), &RenderingServer::cell_light_probe_grid_queue_capture);
+
 	BIND_ENUM_CONSTANT(RSE::REFLECTION_PROBE_UPDATE_ONCE);
 	BIND_ENUM_CONSTANT(RSE::REFLECTION_PROBE_UPDATE_ALWAYS);
 
@@ -3076,6 +3090,8 @@ void RenderingServer::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("environment_set_bg_energy", "env", "multiplier", "exposure_value"), &RenderingServer::environment_set_bg_energy);
 	ClassDB::bind_method(D_METHOD("environment_set_canvas_max_layer", "env", "max_layer"), &RenderingServer::environment_set_canvas_max_layer);
 	ClassDB::bind_method(D_METHOD("environment_set_ambient_light", "env", "color", "ambient", "energy", "sky_contribution", "reflection_source"), &RenderingServer::environment_set_ambient_light, DEFVAL(RSE::ENV_AMBIENT_SOURCE_BG), DEFVAL(1.0), DEFVAL(0.0), DEFVAL(RSE::ENV_REFLECTION_SOURCE_BG));
+	ClassDB::bind_method(D_METHOD("environment_set_cell_light_probe_grid", "environment", "grid"), &RenderingServer::environment_set_cell_light_probe_grid);
+	ClassDB::bind_method(D_METHOD("environment_set_cell_light_probes", "environment", "enable", "energy"), &RenderingServer::environment_set_cell_light_probes);
 	ClassDB::bind_method(D_METHOD("environment_set_glow", "env", "enable", "levels", "intensity", "strength", "mix", "bloom_threshold", "blend_mode", "hdr_bleed_threshold", "hdr_bleed_scale", "hdr_luminance_cap", "glow_map_strength", "glow_map"), &RenderingServer::environment_set_glow);
 	ClassDB::bind_method(D_METHOD("environment_set_tonemap", "env", "tone_mapper", "exposure", "white"), &RenderingServer::environment_set_tonemap);
 	ClassDB::bind_method(D_METHOD("environment_set_tonemap_agx_contrast", "env", "agx_contrast"), &RenderingServer::environment_set_tonemap_agx_contrast);
@@ -3711,6 +3727,8 @@ void RenderingServer::init() {
 	GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/reflections/reflection_atlas/reflection_count", PROPERTY_HINT_RANGE, "1,256,1"), 64);
 	GLOBAL_DEF_RST("rendering/reflections/specular_occlusion/enabled", true);
 
+	GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/global_illumination/cell_light_probes/capture_resolution", PROPERTY_HINT_ENUM, "8 px (Fastest):8,16 px (Balanced):16,32 px (High Quality):32,64 px (Highest Quality):64"), 16);
+	GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/global_illumination/cell_light_probes/captures_per_frame", PROPERTY_HINT_RANGE, "1,8,1"), 1);
 	GLOBAL_DEF("rendering/global_illumination/gi/use_half_resolution", false);
 
 	GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/global_illumination/voxel_gi/quality", PROPERTY_HINT_ENUM, "Low (4 Cones - Fast),High (6 Cones - Slow)"), 0);

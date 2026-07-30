@@ -1247,6 +1247,7 @@ void fragment_shader(in SceneData scene_data) {
 #endif
 
 	float ao = 1.0;
+	float bent_cone_aperture = 0.0;
 	float ao_light_affect = 0.0;
 
 	float alpha_highp = float(instances.data[instance_index].flags >> INSTANCE_FLAGS_FADE_SHIFT) / float(255.0);

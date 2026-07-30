@@ -3070,6 +3070,14 @@
 			If [code]true[/code], disables the threaded optimization feature from the NVIDIA drivers, which are known to cause stuttering in most OpenGL applications.
 			[b]Note:[/b] This setting only works on Windows, as threaded optimization is disabled by default on other platforms.
 		</member>
+		<member name="rendering/global_illumination/cell_light_probes/capture_resolution" type="int" setter="" getter="" default="16">
+			The cubemap face resolution used when capturing cell light probes. Higher values preserve more directional detail in the resulting diffuse indirect lighting, at the cost of GPU time during probe updates. Since cell probe captures are convolved into spherical harmonics, values above [code]32[/code] usually have diminishing visual benefit.
+			[b]Note:[/b] This property is only read when the project starts.
+		</member>
+		<member name="rendering/global_illumination/cell_light_probes/captures_per_frame" type="int" setter="" getter="" default="1">
+			The maximum number of queued cell light probe captures processed per frame. Increasing this value makes invalidated lighting converge sooner, but may cause larger frame-time spikes. This setting does not change the priority order of queued captures.
+			[b]Note:[/b] This property is only read when the project starts.
+		</member>
 		<member name="rendering/global_illumination/gi/use_half_resolution" type="bool" setter="" getter="" default="false" keywords="size">
 			If [code]true[/code], renders [VoxelGI] and SDFGI ([member Environment.sdfgi_enabled]) buffers at halved resolution (e.g. 960×540 when the viewport size is 1920×1080). This improves performance significantly when VoxelGI or SDFGI is enabled, at the cost of artifacts that may be visible on polygon edges. The loss in quality becomes less noticeable as the viewport resolution increases. [LightmapGI] rendering is not affected by this setting.
 			[b]Note:[/b] This property is only read when the project starts. To set half-resolution GI at run-time, call [method RenderingServer.gi_set_use_half_resolution] instead.

@@ -80,6 +80,9 @@ private:
 		float ambient_light_energy = 1.0;
 		float ambient_sky_contribution = 1.0;
 		RSE::EnvironmentReflectionSource reflection_source = RSE::ENV_REFLECTION_SOURCE_BG;
+		bool cell_light_probes_enabled = false;
+		float cell_light_probes_energy = 1.0f;
+		RID cell_light_probe_grid;
 		int camera_feed_id = 0;
 
 		// Tonemap
@@ -207,6 +210,11 @@ public:
 	void environment_set_bg_energy(RID p_env, float p_multiplier, float p_exposure_value);
 	void environment_set_canvas_max_layer(RID p_env, int p_max_layer);
 	void environment_set_ambient_light(RID p_env, const Color &p_color, RSE::EnvironmentAmbientSource p_ambient = RSE::ENV_AMBIENT_SOURCE_BG, float p_energy = 1.0, float p_sky_contribution = 0.0, RSE::EnvironmentReflectionSource p_reflection_source = RSE::ENV_REFLECTION_SOURCE_BG);
+	void environment_set_cell_light_probe_grid(RID p_env, RID p_grid);
+	RID environment_get_cell_light_probe_grid(RID p_env) const;
+	void environment_set_cell_light_probes(RID p_env, bool p_enable, float p_energy);
+	bool environment_get_cell_light_probes_enabled(RID p_env) const;
+	float environment_get_cell_light_probes_energy(RID p_env) const;
 	void environment_set_camera_feed_id(RID p_env, int p_camera_feed_id);
 	int environment_get_camera_feed_id(RID p_env) const;
 

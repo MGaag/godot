@@ -372,6 +372,20 @@ public:
 	virtual void reflection_probe_set_resolution(RID p_probe, int p_resolution) = 0;
 	virtual void reflection_probe_set_mesh_lod_threshold(RID p_probe, float p_pixels) = 0;
 
+	/* CELL LIGHT PROBE GRID API */
+
+	virtual bool cell_light_probe_grid_is_supported() const = 0;
+	virtual RID cell_light_probe_grid_create() = 0;
+	virtual void cell_light_probe_grid_configure(RID p_grid, uint32_t p_probe_count, uint32_t p_layer_count, const Vector3i &p_dimensions, const Vector3 &p_origin, const Vector3 &p_cell_size) = 0;
+	virtual void cell_light_probe_grid_set_cell_indices(RID p_grid, const PackedInt32Array &p_cell_indices) = 0;
+	virtual void cell_light_probe_grid_set_edge_transmissibility(RID p_grid, const PackedFloat32Array &p_edge_transmissibility) = 0;
+	virtual void cell_light_probe_grid_resolve(RID p_grid, const PackedFloat32Array &p_layer_weights) = 0;
+	virtual uint64_t cell_light_probe_grid_get_capture_generation(RID p_grid) const = 0;
+	virtual uint64_t cell_light_probe_grid_get_resolve_generation(RID p_grid) const = 0;
+	virtual PackedColorArray cell_light_probe_grid_debug_get_resolved_sh(RID p_grid) const = 0;
+	virtual uint32_t cell_light_probe_grid_get_pending_capture_count(RID p_grid) const = 0;
+	virtual void cell_light_probe_grid_queue_capture(RID p_grid, RID p_scenario, uint32_t p_probe, uint32_t p_layer, const Vector3 &p_position, float p_max_distance, uint32_t p_cull_mask, bool p_shadows, uint32_t p_graph_distance, uint32_t p_player_distance, bool p_active_layer, const TypedArray<RID> &p_excluded_lights) = 0;
+
 	/* DECAL API */
 
 	virtual RID decal_create() = 0;
@@ -657,6 +671,8 @@ public:
 	virtual void environment_set_bg_energy(RID p_env, float p_multiplier, float p_exposure_value) = 0;
 	virtual void environment_set_canvas_max_layer(RID p_env, int p_max_layer) = 0;
 	virtual void environment_set_ambient_light(RID p_env, const Color &p_color, RSE::EnvironmentAmbientSource p_ambient = RSE::ENV_AMBIENT_SOURCE_BG, float p_energy = 1.0, float p_sky_contribution = 0.0, RSE::EnvironmentReflectionSource p_reflection_source = RSE::ENV_REFLECTION_SOURCE_BG) = 0;
+	virtual void environment_set_cell_light_probe_grid(RID p_env, RID p_grid) = 0;
+	virtual void environment_set_cell_light_probes(RID p_env, bool p_enable, float p_energy) = 0;
 	virtual void environment_set_camera_feed_id(RID p_env, int p_camera_feed_id) = 0;
 
 	virtual void environment_set_glow(RID p_env, bool p_enable, Vector<float> p_levels, float p_intensity, float p_strength, float p_mix, float p_bloom_threshold, RSE::EnvironmentGlowBlendMode p_blend_mode, float p_hdr_bleed_threshold, float p_hdr_bleed_scale, float p_hdr_luminance_cap, float p_glow_map_strength, RID p_glow_map) = 0;

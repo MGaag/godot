@@ -719,6 +719,27 @@ RID RenderForwardMobile::_setup_render_pass_uniform_set(RenderListType p_render_
 
 	p_samplers.append_uniforms(uniforms, 13);
 
+	// Probe captures deliberately receive the disabled fallback grid so the
+	// first indirect bounce cannot feed recursively into itself.
+	RID cell_grid_environment = (p_render_data && p_render_data->reflection_probe.is_null()) ? p_render_data->environment : RID();
+	RendererRD::CellLightProbeGridRD *cell_grid = cell_light_probe_grid_get_for_environment(cell_grid_environment);
+	{
+		RD::Uniform u(RD::UNIFORM_TYPE_STORAGE_BUFFER, 25, cell_grid->get_active_buffer());
+		uniforms.push_back(u);
+	}
+	{
+		RD::Uniform u(RD::UNIFORM_TYPE_STORAGE_BUFFER, 26, cell_grid->get_metadata_buffer());
+		uniforms.push_back(u);
+	}
+	{
+		RD::Uniform u(RD::UNIFORM_TYPE_STORAGE_BUFFER, 27, cell_grid->get_cell_index_buffer());
+		uniforms.push_back(u);
+	}
+	{
+		RD::Uniform u(RD::UNIFORM_TYPE_STORAGE_BUFFER, 28, cell_grid->get_edge_transmissibility_buffer());
+		uniforms.push_back(u);
+	}
+
 	return UniformSetCacheRD::get_singleton()->get_cache_vec(scene_shader.get_default_shader_rd(is_multiview), RENDER_PASS_UNIFORM_SET, uniforms);
 }
 

@@ -82,6 +82,13 @@
 		<member name="background_mode" type="int" setter="set_background" getter="get_background" enum="Environment.BGMode" default="0">
 			The background mode.
 		</member>
+		<member name="cell_light_probes_enabled" type="bool" setter="set_cell_light_probes_enabled" getter="is_cell_light_probes_enabled" default="false">
+			If [code]true[/code], enables the cell light probe grid attached to this environment. Cell light probes provide runtime diffuse indirect lighting for cell-based environments. A grid must be created and attached using the [RenderingServer] cell light probe API before this setting has a visible effect.
+			[b]Note:[/b] Cell light probes are only supported in the Mobile rendering method, not Forward+ or Compatibility. When a surface uses baked [LightmapGI], the lightmap takes precedence over cell light probes to avoid applying indirect lighting twice.
+		</member>
+		<member name="cell_light_probes_energy" type="float" setter="set_cell_light_probes_energy" getter="get_cell_light_probes_energy" default="1.0">
+			Multiplier for diffuse indirect lighting supplied by the attached cell light probe grid. See also [member cell_light_probes_enabled].
+		</member>
 		<member name="fog_aerial_perspective" type="float" setter="set_fog_aerial_perspective" getter="get_fog_aerial_perspective" default="0.0">
 			If set above [code]0.0[/code] (exclusive), blends between the fog's color and the color of the background [Sky], as read from the radiance cubemap. This has a small performance cost when set above [code]0.0[/code]. Must have [member background_mode] set to [constant BG_SKY].
 			This is useful to simulate [url=https://en.wikipedia.org/wiki/Aerial_perspective]aerial perspective[/url] in large scenes with low density fog. However, it is not very useful for high-density fog, as the sky will shine through. When set to [code]1.0[/code], the fog color comes completely from the [Sky]. If set to [code]0.0[/code], aerial perspective is disabled.

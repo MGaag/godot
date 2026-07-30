@@ -641,6 +641,7 @@ protected:
 	};
 
 public:
+	virtual bool cell_light_probe_grid_is_supported() const override { return true; }
 	static RenderForwardMobile *get_singleton() { return singleton; }
 
 	virtual RID reflection_probe_create_framebuffer(RID p_color, RID p_depth) override;

@@ -2270,6 +2270,9 @@ void main() {
 #endif
 
 	float normal_map_depth = 1.0;
+	// Accepted for material portability. Cell-light probes are RD Mobile-only,
+	// so Compatibility intentionally ignores the authored aperture value.
+	float bent_cone_aperture = 0.0;
 
 	vec2 screen_uv = gl_FragCoord.xy * scene_data_block.data.screen_pixel_size;
 

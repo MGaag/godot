@@ -403,6 +403,35 @@ layout(set = 1, binding = 11) uniform sampler decal_sampler;
 
 layout(set = 1, binding = 12) uniform sampler light_projector_sampler;
 
+layout(set = 1, binding = 25, std430) restrict readonly buffer CellLightProbeCoefficients
+{
+	vec4 values[];
+}
+cell_light_probe_coefficients;
+
+layout(set = 1, binding = 26, std430) restrict readonly buffer CellLightProbeMetadata
+{
+	vec3 origin;
+	uint enabled;
+	vec3 inverse_cell_size;
+	uint metadata_pad0;
+	uvec3 dimensions;
+	uint probe_count;
+}
+cell_light_probe_metadata;
+
+layout(set = 1, binding = 27, std430) restrict readonly buffer CellLightProbeIndices
+{
+	int values[];
+}
+cell_light_probe_indices;
+
+layout(set = 1, binding = 28, std430) restrict readonly buffer CellLightProbeEdges
+{
+	vec4 values[];
+}
+cell_light_probe_edges;
+
 layout(set = 1, binding = 13 + 0) uniform sampler SAMPLER_NEAREST_CLAMP;
 layout(set = 1, binding = 13 + 1) uniform sampler SAMPLER_LINEAR_CLAMP;
 layout(set = 1, binding = 13 + 2) uniform sampler SAMPLER_NEAREST_WITH_MIPMAPS_CLAMP;

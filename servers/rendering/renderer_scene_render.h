@@ -120,6 +120,8 @@ public:
 	void environment_set_bg_energy(RID p_env, float p_multiplier, float p_exposure_value);
 	void environment_set_canvas_max_layer(RID p_env, int p_max_layer);
 	void environment_set_ambient_light(RID p_env, const Color &p_color, RSE::EnvironmentAmbientSource p_ambient = RSE::ENV_AMBIENT_SOURCE_BG, float p_energy = 1.0, float p_sky_contribution = 0.0, RSE::EnvironmentReflectionSource p_reflection_source = RSE::ENV_REFLECTION_SOURCE_BG);
+	void environment_set_cell_light_probe_grid(RID p_env, RID p_grid);
+	void environment_set_cell_light_probes(RID p_env, bool p_enable, float p_energy);
 	void environment_set_camera_feed_id(RID p_env, int p_camera_feed_id);
 
 	RSE::EnvironmentBG environment_get_background(RID p_env) const;
@@ -135,6 +137,9 @@ public:
 	float environment_get_ambient_light_energy(RID p_env) const;
 	float environment_get_ambient_sky_contribution(RID p_env) const;
 	RSE::EnvironmentReflectionSource environment_get_reflection_source(RID p_env) const;
+	RID environment_get_cell_light_probe_grid(RID p_env) const;
+	bool environment_get_cell_light_probes_enabled(RID p_env) const;
+	float environment_get_cell_light_probes_energy(RID p_env) const;
 	int environment_get_camera_feed_id(RID p_env) const;
 
 	// Tonemap
@@ -333,6 +338,22 @@ public:
 
 	virtual Ref<RenderSceneBuffers> render_buffers_create() = 0;
 	virtual void gi_set_use_half_resolution(bool p_enable) = 0;
+
+	// Grid-aligned diffuse probes are optional because the compatibility
+	// renderer has no storage-buffer implementation. The default methods keep
+	// that backend functional while RD renderers provide the native subsystem.
+	virtual bool cell_light_probe_grid_is_supported() const { return false; }
+	virtual bool cell_light_probe_grid_is_valid_capture_target(RID p_grid, uint32_t p_probe, uint32_t p_layer) const { return false; }
+	virtual RID cell_light_probe_grid_allocate() { return RID(); }
+	virtual void cell_light_probe_grid_initialize(RID p_grid) {}
+	virtual void cell_light_probe_grid_configure(RID p_grid, uint32_t p_probe_count, uint32_t p_layer_count, const Vector3i &p_dimensions, const Vector3 &p_origin, const Vector3 &p_cell_size) {}
+	virtual void cell_light_probe_grid_set_cell_indices(RID p_grid, const PackedInt32Array &p_cell_indices) {}
+	virtual void cell_light_probe_grid_set_edge_transmissibility(RID p_grid, const PackedFloat32Array &p_edge_transmissibility) {}
+	virtual void cell_light_probe_grid_resolve(RID p_grid, const PackedFloat32Array &p_layer_weights) {}
+	virtual uint64_t cell_light_probe_grid_get_capture_generation(RID p_grid) const { return 0; }
+	virtual uint64_t cell_light_probe_grid_get_resolve_generation(RID p_grid) const { return 0; }
+	virtual PackedColorArray cell_light_probe_grid_debug_get_resolved_sh(RID p_grid) const { return PackedColorArray(); }
+	virtual void cell_light_probe_grid_convolve_capture(RID p_grid, RID p_cubemap, uint32_t p_cubemap_size, uint32_t p_probe, uint32_t p_layer) {}
 
 	virtual void screen_space_roughness_limiter_set_active(bool p_enable, float p_amount, float p_limit) = 0;
 	virtual bool screen_space_roughness_limiter_is_active() const = 0;

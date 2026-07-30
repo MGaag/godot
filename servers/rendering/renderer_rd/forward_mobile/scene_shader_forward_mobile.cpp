@@ -758,6 +758,7 @@ void SceneShaderForwardMobile::init(const String p_defines) {
 		actions.renames["NORMAL_MAP"] = "normal_map_highp";
 		actions.renames["NORMAL_MAP_DEPTH"] = "normal_map_depth_highp";
 		actions.renames["BENT_NORMAL_MAP"] = "bent_normal_map_highp";
+		actions.renames["BENT_CONE_APERTURE"] = "bent_cone_aperture_highp";
 		actions.renames["ALBEDO"] = "albedo_highp";
 		actions.renames["DISPLACEMENT"] = "displacement_highp";
 		actions.usage_defines["DISPLACEMENT"] = "#define DISPLACEMENT_USED\n";

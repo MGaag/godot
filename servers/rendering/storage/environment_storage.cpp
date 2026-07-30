@@ -115,6 +115,37 @@ void RendererEnvironmentStorage::environment_set_ambient_light(RID p_env, const 
 	env->reflection_source = p_reflection_source;
 }
 
+void RendererEnvironmentStorage::environment_set_cell_light_probe_grid(RID p_env, RID p_grid) {
+	Environment *env = environment_owner.get_or_null(p_env);
+	ERR_FAIL_NULL(env);
+	env->cell_light_probe_grid = p_grid;
+}
+
+RID RendererEnvironmentStorage::environment_get_cell_light_probe_grid(RID p_env) const {
+	const Environment *env = environment_owner.get_or_null(p_env);
+	ERR_FAIL_NULL_V(env, RID());
+	return env->cell_light_probe_grid;
+}
+
+void RendererEnvironmentStorage::environment_set_cell_light_probes(RID p_env, bool p_enable, float p_energy) {
+	Environment *env = environment_owner.get_or_null(p_env);
+	ERR_FAIL_NULL(env);
+	env->cell_light_probes_enabled = p_enable;
+	env->cell_light_probes_energy = MAX(p_energy, 0.0f);
+}
+
+bool RendererEnvironmentStorage::environment_get_cell_light_probes_enabled(RID p_env) const {
+	const Environment *env = environment_owner.get_or_null(p_env);
+	ERR_FAIL_NULL_V(env, false);
+	return env->cell_light_probes_enabled;
+}
+
+float RendererEnvironmentStorage::environment_get_cell_light_probes_energy(RID p_env) const {
+	const Environment *env = environment_owner.get_or_null(p_env);
+	ERR_FAIL_NULL_V(env, 1.0f);
+	return env->cell_light_probes_energy;
+}
+
 RSE::EnvironmentBG RendererEnvironmentStorage::environment_get_background(RID p_env) const {
 	Environment *env = environment_owner.get_or_null(p_env);
 	ERR_FAIL_NULL_V(env, RSE::ENV_BG_CLEAR_COLOR);

@@ -2934,6 +2934,10 @@ void RendererSceneCull::_scene_cull(CullData &cull_data, InstanceCullResult &cul
 			if ((LAYER_CHECK && IN_FRUSTUM(cull_data.cull->frustum) && VIS_CHECK && !OCCLUSION_CULLED) || (cull_data.scenario->instance_data[i].flags & InstanceData::FLAG_IGNORE_ALL_CULLING)) {
 				uint32_t base_type = idata.flags & InstanceData::FLAG_BASE_TYPE_MASK;
 				if (base_type == RSE::INSTANCE_LIGHT) {
+					if (cull_data.excluded_lights && cull_data.excluded_lights->has(idata.instance->self)) {
+						continue;
+					}
+
 					cull_result.lights.push_back(idata.instance);
 					cull_result.light_instances.push_back(RID::from_uint64(idata.instance_data_rid));
 					if (cull_data.shadow_atlas.is_valid() && RSG::light_storage->light_has_shadow(idata.base_rid)) {
@@ -3299,7 +3303,7 @@ void RendererSceneCull::_scene_particles_set_view_axis(RID p_particles, const Ve
 	RSG::particles_storage->particles_set_view_axis(p_particles, p_axis, p_up_axis);
 }
 
-void RendererSceneCull::_render_scene(const RendererSceneRender::CameraData *p_camera_data, const Ref<RenderSceneBuffers> &p_render_buffers, RID p_environment, RID p_force_camera_attributes, RID p_compositor, uint32_t p_visible_layers, RID p_scenario, RID p_viewport, RID p_shadow_atlas, RID p_reflection_probe, int p_reflection_probe_pass, float p_screen_mesh_lod_threshold, float p_window_output_max_value, bool p_using_shadows, RenderingServerTypes::RenderInfo *r_render_info) {
+void RendererSceneCull::_render_scene(const RendererSceneRender::CameraData *p_camera_data, const Ref<RenderSceneBuffers> &p_render_buffers, RID p_environment, RID p_force_camera_attributes, RID p_compositor, uint32_t p_visible_layers, RID p_scenario, RID p_viewport, RID p_shadow_atlas, RID p_reflection_probe, int p_reflection_probe_pass, float p_screen_mesh_lod_threshold, float p_window_output_max_value, bool p_using_shadows, RenderingServerTypes::RenderInfo *r_render_info, const HashSet<RID> *p_excluded_lights) {
 	Instance *render_reflection_probe = instance_owner.get_or_null(p_reflection_probe); //if null, not rendering to it
 
 	// Prepare the light - camera volume culling system.
@@ -3365,7 +3369,7 @@ void RendererSceneCull::_render_scene(const RendererSceneRender::CameraData *p_c
 		Vector<Instance *> lights_with_shadow;
 
 		for (Instance *E : scenario->directional_lights) {
-			if (!E->visible || !(E->layer_mask & p_visible_layers)) {
+			if (!E->visible || !(E->layer_mask & p_visible_layers) || (p_excluded_lights && p_excluded_lights->has(E->self))) {
 				continue;
 			}
 
@@ -3436,6 +3440,7 @@ void RendererSceneCull::_render_scene(const RendererSceneRender::CameraData *p_c
 		cull_data.occlusion_buffer = RendererSceneOcclusionCull::get_singleton()->buffer_get_ptr(p_viewport);
 		cull_data.camera_matrix = &p_camera_data->main_projection;
 		cull_data.visibility_viewport_mask = scenario->viewport_visibility_masks.has(p_viewport) ? scenario->viewport_visibility_masks[p_viewport] : 0;
+		cull_data.excluded_lights = p_excluded_lights;
 #ifdef DEBUG_CULL_TIME
 		uint64_t time_from = OS::get_singleton()->get_ticks_usec();
 #endif
@@ -3856,6 +3861,10 @@ bool RendererSceneCull::_render_reflection_probe_step(Instance *p_instance, int 
 }
 
 void RendererSceneCull::render_probes() {
+	for (uint32_t capture = 0; capture < cell_light_probe_captures_per_frame && !cell_light_probe_capture_queue.is_empty(); capture++) {
+		_render_cell_light_probe_capture();
+	}
+
 	/* REFLECTION PROBES */
 
 	SelfList<InstanceReflectionProbeData> *ref_probe = reflection_probe_render_list.first();
@@ -4110,6 +4119,140 @@ void RendererSceneCull::render_probes() {
 
 		voxel_gi = next;
 	}
+}
+
+void RendererSceneCull::cell_light_probe_grid_queue_capture(RID p_grid, RID p_scenario, uint32_t p_probe, uint32_t p_layer, const Vector3 &p_position, float p_max_distance, uint32_t p_cull_mask, bool p_shadows, uint32_t p_graph_distance, uint32_t p_player_distance, bool p_active_layer, const TypedArray<RID> &p_excluded_lights) {
+	ERR_FAIL_COND(!scene_render->cell_light_probe_grid_is_supported());
+	ERR_FAIL_COND_MSG(!scene_render->cell_light_probe_grid_is_valid_capture_target(p_grid, p_probe, p_layer), "Cell light probe capture target is not a configured grid layer.");
+	ERR_FAIL_COND(!scenario_owner.owns(p_scenario));
+	ERR_FAIL_COND(p_max_distance <= 0.0f);
+
+	// Merge duplicate invalidations so repeated edits cannot spend several
+	// captures on the same probe layer before the renderer reaches it.
+	for (CellLightProbeCaptureRequest &request : cell_light_probe_capture_queue) {
+		if (request.grid == p_grid && request.probe == p_probe && request.layer == p_layer) {
+			request.scenario = p_scenario;
+			request.position = p_position;
+			request.max_distance = p_max_distance;
+			request.cull_mask = p_cull_mask;
+			request.shadows = p_shadows;
+			request.graph_distance = MIN(request.graph_distance, p_graph_distance);
+			request.player_distance = MIN(request.player_distance, p_player_distance);
+			request.active_layer = request.active_layer || p_active_layer;
+			request.excluded_lights.clear();
+			for (int i = 0; i < p_excluded_lights.size(); i++) {
+				request.excluded_lights.push_back(p_excluded_lights[i]);
+			}
+			return;
+		}
+	}
+
+	CellLightProbeCaptureRequest request;
+	request.grid = p_grid;
+	request.scenario = p_scenario;
+	request.probe = p_probe;
+	request.layer = p_layer;
+	request.position = p_position;
+	request.max_distance = p_max_distance;
+	request.cull_mask = p_cull_mask;
+	request.shadows = p_shadows;
+	request.graph_distance = p_graph_distance;
+	request.player_distance = p_player_distance;
+	request.active_layer = p_active_layer;
+	request.insertion_order = cell_light_probe_capture_insertion_order++;
+	for (int i = 0; i < p_excluded_lights.size(); i++) {
+		request.excluded_lights.push_back(p_excluded_lights[i]);
+	}
+	cell_light_probe_capture_queue.push_back(request);
+}
+
+uint32_t RendererSceneCull::cell_light_probe_grid_get_pending_capture_count(RID p_grid) const {
+	uint32_t count = 0;
+	for (const CellLightProbeCaptureRequest &request : cell_light_probe_capture_queue) {
+		if (request.grid == p_grid) {
+			count++;
+		}
+	}
+	return count;
+}
+
+void RendererSceneCull::_render_cell_light_probe_capture() {
+	if (cell_light_probe_capture_queue.is_empty()) {
+		return;
+	}
+
+	uint32_t best_index = 0;
+	for (uint32_t i = 1; i < (uint32_t)cell_light_probe_capture_queue.size(); i++) {
+		const CellLightProbeCaptureRequest &candidate = cell_light_probe_capture_queue[i];
+		const CellLightProbeCaptureRequest &best = cell_light_probe_capture_queue[best_index];
+		bool higher_priority = candidate.active_layer != best.active_layer ? candidate.active_layer :
+				(candidate.graph_distance != best.graph_distance ? candidate.graph_distance < best.graph_distance :
+						(candidate.player_distance != best.player_distance ? candidate.player_distance < best.player_distance : candidate.insertion_order < best.insertion_order));
+		if (higher_priority) {
+			best_index = i;
+		}
+	}
+
+	CellLightProbeCaptureRequest request = cell_light_probe_capture_queue[best_index];
+	cell_light_probe_capture_queue.remove_at(best_index);
+	Scenario *scenario = scenario_owner.get_or_null(request.scenario);
+	if (!scenario) {
+		return;
+	}
+
+	if (cell_light_probe_capture_atlas.is_null()) {
+		cell_light_probe_capture_atlas = RSG::light_storage->reflection_atlas_create();
+		RSG::light_storage->reflection_atlas_set_size(cell_light_probe_capture_atlas, cell_light_probe_capture_resolution, 1);
+	}
+
+	RID probe = RSG::light_storage->reflection_probe_allocate();
+	RSG::light_storage->reflection_probe_initialize(probe);
+	RSG::light_storage->reflection_probe_set_size(probe, Vector3(request.max_distance * 2.0f, request.max_distance * 2.0f, request.max_distance * 2.0f));
+	RSG::light_storage->reflection_probe_set_max_distance(probe, request.max_distance);
+	RSG::light_storage->reflection_probe_set_enable_shadows(probe, request.shadows);
+	RSG::light_storage->reflection_probe_set_cull_mask(probe, request.cull_mask);
+
+	RID probe_instance = RSG::light_storage->reflection_probe_instance_create(probe);
+	RSG::light_storage->reflection_probe_instance_set_transform(probe_instance, Transform3D(Basis(), request.position));
+	if (!RSG::light_storage->reflection_probe_instance_begin_render(probe_instance, cell_light_probe_capture_atlas)) {
+		RSG::light_storage->reflection_probe_instance_free(probe_instance);
+		RSG::light_storage->reflection_probe_free(probe);
+		return;
+	}
+
+	static const Vector3 view_normals[6] = {
+		Vector3(+1, 0, 0), Vector3(-1, 0, 0), Vector3(0, +1, 0),
+		Vector3(0, -1, 0), Vector3(0, 0, +1), Vector3(0, 0, -1)
+	};
+	static const Vector3 view_up[6] = {
+		Vector3(0, -1, 0), Vector3(0, -1, 0), Vector3(0, 0, +1),
+		Vector3(0, 0, -1), Vector3(0, -1, 0), Vector3(0, -1, 0)
+	};
+
+	RID environment = scenario->environment.is_valid() ? scenario->environment : scenario->fallback_environment;
+	RID shadow_atlas = request.shadows ? scenario->reflection_probe_shadow_atlas : RID();
+	Ref<RenderSceneBuffers> render_buffers = RSG::light_storage->reflection_probe_atlas_get_render_buffers(cell_light_probe_capture_atlas);
+	HashSet<RID> excluded_lights;
+	for (const RID &light : request.excluded_lights) {
+		excluded_lights.insert(light);
+	}
+	for (uint32_t face = 0; face < 6; face++) {
+		Projection projection;
+		projection.set_perspective(90.0f, 1.0f, 0.01f, request.max_distance);
+
+		Transform3D camera_transform;
+		camera_transform.set_look_at(request.position, request.position + view_normals[face], view_up[face]);
+		RendererSceneRender::CameraData camera_data;
+		camera_data.set_camera(camera_transform, projection, false, false);
+		_render_scene(&camera_data, render_buffers, environment, RID(), RID(), request.cull_mask, request.scenario, RID(), shadow_atlas, probe_instance, face, 0.01f, 1.0f, request.shadows, nullptr, &excluded_lights);
+	}
+
+	RSG::light_storage->reflection_probe_instance_end_render(probe_instance, cell_light_probe_capture_atlas);
+	RID capture_cubemap = RSG::light_storage->reflection_atlas_get_capture_cubemap(cell_light_probe_capture_atlas);
+	scene_render->cell_light_probe_grid_convolve_capture(request.grid, capture_cubemap, cell_light_probe_capture_resolution, request.probe, request.layer);
+
+	RSG::light_storage->reflection_probe_instance_free(probe_instance);
+	RSG::light_storage->reflection_probe_free(probe);
 }
 
 void RendererSceneCull::render_particle_colliders() {
@@ -4389,6 +4532,16 @@ bool RendererSceneCull::free(RID p_rid) {
 		return true;
 	}
 
+	// Capture requests outlive the nodes that queued them. Remove matching work
+	// before freeing either endpoint so stale jobs cannot render six faces and
+	// then attempt to write to a dead grid or scenario.
+	for (int64_t i = cell_light_probe_capture_queue.size() - 1; i >= 0; i--) {
+		const CellLightProbeCaptureRequest &request = cell_light_probe_capture_queue[i];
+		if (request.grid == p_rid || request.scenario == p_rid) {
+			cell_light_probe_capture_queue.remove_at(i);
+		}
+	}
+
 	if (scene_render->free(p_rid)) {
 		return true;
 	}
@@ -4518,6 +4671,10 @@ RendererSceneCull::RendererSceneCull() {
 	}
 
 	indexer_update_iterations = GLOBAL_GET("rendering/limits/spatial_indexer/update_iterations_per_frame");
+	cell_light_probe_capture_resolution = GLOBAL_GET("rendering/global_illumination/cell_light_probes/capture_resolution");
+	cell_light_probe_capture_resolution = CLAMP(cell_light_probe_capture_resolution, 8u, 64u);
+	cell_light_probe_captures_per_frame = GLOBAL_GET("rendering/global_illumination/cell_light_probes/captures_per_frame");
+	cell_light_probe_captures_per_frame = CLAMP(cell_light_probe_captures_per_frame, 1u, 8u);
 	thread_cull_threshold = GLOBAL_GET("rendering/limits/spatial_indexer/threaded_cull_minimum_instances");
 	thread_cull_threshold = MAX(thread_cull_threshold, (uint32_t)WorkerThreadPool::get_singleton()->get_thread_count()); //make sure there is at least one thread per CPU
 	RendererSceneOcclusionCull::HZBuffer::occlusion_jitter_enabled = GLOBAL_GET("rendering/occlusion_culling/jitter_projection");
@@ -4532,6 +4689,10 @@ RendererSceneCull::RendererSceneCull() {
 }
 
 RendererSceneCull::~RendererSceneCull() {
+	if (cell_light_probe_capture_atlas.is_valid()) {
+		RSG::light_storage->reflection_atlas_free(cell_light_probe_capture_atlas);
+	}
+
 	instance_cull_result.reset();
 	instance_shadow_cull_result.reset();
 

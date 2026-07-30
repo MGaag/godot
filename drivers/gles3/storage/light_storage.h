@@ -687,6 +687,7 @@ public:
 	virtual RID reflection_atlas_create() override;
 	virtual void reflection_atlas_free(RID p_ref_atlas) override;
 	virtual int reflection_atlas_get_size(RID p_ref_atlas) const override;
+	virtual RID reflection_atlas_get_capture_cubemap(RID p_ref_atlas) const override { return RID(); }
 	virtual void reflection_atlas_set_size(RID p_ref_atlas, int p_reflection_size, int p_reflection_count) override;
 
 	/* REFLECTION PROBE INSTANCE */

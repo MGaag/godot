@@ -162,6 +162,10 @@ private:
 	float sdfgi_probe_bias = 1.1;
 	void _update_sdfgi();
 
+	bool cell_light_probes_enabled = false;
+	float cell_light_probes_energy = 1.0f;
+	void _update_cell_light_probes();
+
 	// Glow
 	bool glow_enabled = false;
 	Vector<float> glow_levels;
@@ -348,6 +352,11 @@ public:
 	float get_sdfgi_normal_bias() const;
 	void set_sdfgi_probe_bias(float p_bias);
 	float get_sdfgi_probe_bias() const;
+
+	void set_cell_light_probes_enabled(bool p_enabled);
+	bool is_cell_light_probes_enabled() const;
+	void set_cell_light_probes_energy(float p_energy);
+	float get_cell_light_probes_energy() const;
 
 	// Glow
 	void set_glow_enabled(bool p_enabled);

@@ -299,6 +299,14 @@ void RendererSceneRender::environment_set_ambient_light(RID p_env, const Color &
 	environment_storage.environment_set_ambient_light(p_env, p_color, p_ambient, p_energy, p_sky_contribution, p_reflection_source);
 }
 
+void RendererSceneRender::environment_set_cell_light_probe_grid(RID p_env, RID p_grid) {
+	environment_storage.environment_set_cell_light_probe_grid(p_env, p_grid);
+}
+
+void RendererSceneRender::environment_set_cell_light_probes(RID p_env, bool p_enable, float p_energy) {
+	environment_storage.environment_set_cell_light_probes(p_env, p_enable, p_energy);
+}
+
 RSE::EnvironmentBG RendererSceneRender::environment_get_background(RID p_env) const {
 	return environment_storage.environment_get_background(p_env);
 }
@@ -349,6 +357,18 @@ float RendererSceneRender::environment_get_ambient_sky_contribution(RID p_env) c
 
 RSE::EnvironmentReflectionSource RendererSceneRender::environment_get_reflection_source(RID p_env) const {
 	return environment_storage.environment_get_reflection_source(p_env);
+}
+
+RID RendererSceneRender::environment_get_cell_light_probe_grid(RID p_env) const {
+	return environment_storage.environment_get_cell_light_probe_grid(p_env);
+}
+
+bool RendererSceneRender::environment_get_cell_light_probes_enabled(RID p_env) const {
+	return environment_storage.environment_get_cell_light_probes_enabled(p_env);
+}
+
+float RendererSceneRender::environment_get_cell_light_probes_energy(RID p_env) const {
+	return environment_storage.environment_get_cell_light_probes_energy(p_env);
 }
 
 void RendererSceneRender::environment_set_camera_feed_id(RID p_env, int p_camera_feed_id) {

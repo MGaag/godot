@@ -1000,6 +1000,8 @@ layout(set = MATERIAL_UNIFORM_SET, binding = 0, std140) uniform MaterialUniforms
 
 #define scene_data scene_data_block.data
 
+#include "cell_light_probe_sampling_inc.glsl"
+
 /* clang-format on */
 
 #ifdef MODE_RENDER_DEPTH
@@ -1171,6 +1173,8 @@ void main() {
 
 	float ao_highp = 1.0;
 	float ao_light_affect_highp = 0.0;
+	// Cosine zero is a full unoccluded hemisphere; one is a zero-width cone.
+	float bent_cone_aperture_highp = 0.0;
 
 	float alpha_highp = 1.0;
 
@@ -1659,6 +1663,15 @@ void main() {
 			ambient_light = mix(ambient_light, octmap_ambient * half(scene_data.ambient_light_color_energy.a), half(scene_data.ambient_color_sky_mix));
 		}
 	}
+#endif // !USE_LIGHTMAP
+
+#ifndef USE_LIGHTMAP
+	// Asset materials provide a tangent-space bent direction, cone aperture, and
+	// AO visibility. LightmapGI takes precedence when a receiver has baked data.
+	vec3 cell_light_world_position = (inv_view_matrix * vec4(vertex, 1.0)).xyz;
+	vec3 cell_light_world_direction = mat3(inv_view_matrix) * vec3(indirect_normal);
+	if (cell_light_probe_metadata.enabled != 0)
+		ambient_light = hvec3(sample_cell_light_probe_grid(cell_light_world_position, cell_light_world_direction, bent_cone_aperture_highp)) * half(scene_data.IBL_exposure_normalization * scene_data.cell_light_probes_energy_pad.x);
 #endif // !USE_LIGHTMAP
 
 #if defined(CUSTOM_IRRADIANCE_USED)

@@ -1533,7 +1533,9 @@ void RendererSceneRenderRD::render_particle_collider_heightfield(RID p_collider,
 }
 
 bool RendererSceneRenderRD::free(RID p_rid) {
-	if (is_environment(p_rid)) {
+	if (cell_light_probe_grid_owner.owns(p_rid)) {
+		cell_light_probe_grid_owner.free(p_rid);
+	} else if (is_environment(p_rid)) {
 		environment_free(p_rid);
 	} else if (is_compositor(p_rid)) {
 		compositor_free(p_rid);
@@ -1553,6 +1555,87 @@ bool RendererSceneRenderRD::free(RID p_rid) {
 	}
 
 	return true;
+}
+
+bool RendererSceneRenderRD::cell_light_probe_grid_is_supported() const {
+	return false;
+}
+
+bool RendererSceneRenderRD::cell_light_probe_grid_is_valid_capture_target(RID p_grid, uint32_t p_probe, uint32_t p_layer) const {
+	const RendererRD::CellLightProbeGridRD *grid = cell_light_probe_grid_owner.get_or_null(p_grid);
+	return grid && grid->is_configured() && p_probe < grid->get_probe_count() && p_layer < grid->get_layer_count();
+}
+
+RID RendererSceneRenderRD::cell_light_probe_grid_allocate() {
+	if (!cell_light_probe_grid_is_supported()) {
+		return RID();
+	}
+	return cell_light_probe_grid_owner.allocate_rid();
+}
+
+void RendererSceneRenderRD::cell_light_probe_grid_initialize(RID p_grid) {
+	ERR_FAIL_COND(!cell_light_probe_grid_is_supported());
+	cell_light_probe_grid_owner.initialize_rid(p_grid);
+}
+
+void RendererSceneRenderRD::cell_light_probe_grid_configure(RID p_grid, uint32_t p_probe_count, uint32_t p_layer_count, const Vector3i &p_dimensions, const Vector3 &p_origin, const Vector3 &p_cell_size) {
+	RendererRD::CellLightProbeGridRD *grid = cell_light_probe_grid_owner.get_or_null(p_grid);
+	ERR_FAIL_NULL(grid);
+	grid->configure(p_probe_count, p_layer_count, p_dimensions, p_origin, p_cell_size);
+}
+
+void RendererSceneRenderRD::cell_light_probe_grid_set_cell_indices(RID p_grid, const PackedInt32Array &p_cell_indices) {
+	RendererRD::CellLightProbeGridRD *grid = cell_light_probe_grid_owner.get_or_null(p_grid);
+	ERR_FAIL_NULL(grid);
+	grid->set_cell_indices(p_cell_indices);
+}
+
+void RendererSceneRenderRD::cell_light_probe_grid_set_edge_transmissibility(RID p_grid, const PackedFloat32Array &p_edge_transmissibility) {
+	RendererRD::CellLightProbeGridRD *grid = cell_light_probe_grid_owner.get_or_null(p_grid);
+	ERR_FAIL_NULL(grid);
+	grid->set_edge_transmissibility(p_edge_transmissibility);
+}
+
+void RendererSceneRenderRD::cell_light_probe_grid_resolve(RID p_grid, const PackedFloat32Array &p_layer_weights) {
+	RendererRD::CellLightProbeGridRD *grid = cell_light_probe_grid_owner.get_or_null(p_grid);
+	ERR_FAIL_NULL(grid);
+	grid->resolve(p_layer_weights);
+}
+
+uint64_t RendererSceneRenderRD::cell_light_probe_grid_get_capture_generation(RID p_grid) const {
+	const RendererRD::CellLightProbeGridRD *grid = cell_light_probe_grid_owner.get_or_null(p_grid);
+	ERR_FAIL_NULL_V(grid, 0);
+	return grid->get_capture_generation();
+}
+
+uint64_t RendererSceneRenderRD::cell_light_probe_grid_get_resolve_generation(RID p_grid) const {
+	const RendererRD::CellLightProbeGridRD *grid = cell_light_probe_grid_owner.get_or_null(p_grid);
+	ERR_FAIL_NULL_V(grid, 0);
+	return grid->get_resolve_generation();
+}
+
+PackedColorArray RendererSceneRenderRD::cell_light_probe_grid_debug_get_resolved_sh(RID p_grid) const {
+	const RendererRD::CellLightProbeGridRD *grid = cell_light_probe_grid_owner.get_or_null(p_grid);
+	ERR_FAIL_NULL_V(grid, PackedColorArray());
+	return grid->debug_get_resolved_sh();
+}
+
+void RendererSceneRenderRD::cell_light_probe_grid_convolve_capture(RID p_grid, RID p_cubemap, uint32_t p_cubemap_size, uint32_t p_probe, uint32_t p_layer) {
+	RendererRD::CellLightProbeGridRD *grid = cell_light_probe_grid_owner.get_or_null(p_grid);
+	ERR_FAIL_NULL(grid);
+	grid->convolve_capture(cell_light_probe_convolver, p_cubemap, p_cubemap_size, p_probe, p_layer);
+}
+
+RendererRD::CellLightProbeGridRD *RendererSceneRenderRD::cell_light_probe_grid_get_for_environment(RID p_environment) const {
+	if (p_environment.is_valid() && is_environment(p_environment) && environment_get_cell_light_probes_enabled(p_environment)) {
+		RID grid_rid = environment_get_cell_light_probe_grid(p_environment);
+		RendererRD::CellLightProbeGridRD *grid = cell_light_probe_grid_owner.get_or_null(grid_rid);
+		if (grid && grid->is_configured()) {
+			return grid;
+		}
+	}
+
+	return cell_light_probe_grid_owner.get_or_null(fallback_cell_light_probe_grid);
 }
 
 void RendererSceneRenderRD::set_debug_draw_mode(RSE::ViewportDebugDraw p_debug_draw) {
@@ -1875,6 +1958,14 @@ void RendererSceneRenderRD::init() {
 	copy_effects = memnew(RendererRD::CopyEffects(raster_effects));
 	debug_effects = memnew(RendererRD::DebugEffects);
 	luminance = memnew(RendererRD::Luminance(!can_use_storage));
+	// Cell probes use storage buffers and sampled cubemaps, not storage access
+	// to the main render target. Keep them available on Mobile devices that use
+	// raster fallbacks for post-processing color images.
+	if (cell_light_probe_grid_is_supported()) {
+		cell_light_probe_convolver = memnew(RendererRD::CellLightProbeConvolver);
+		fallback_cell_light_probe_grid = cell_light_probe_grid_owner.make_rid();
+		cell_light_probe_grid_owner.get_or_null(fallback_cell_light_probe_grid)->configure(1, 1, Vector3i(1, 1, 1), Vector3(), Vector3(1.0f, 1.0f, 1.0f), false);
+	}
 	smaa = memnew(RendererRD::SMAA);
 	tone_mapper = memnew(RendererRD::ToneMapper(!can_use_storage));
 	if (can_use_vrs) {
@@ -1890,12 +1981,17 @@ void RendererSceneRenderRD::init() {
 }
 
 RendererSceneRenderRD::~RendererSceneRenderRD() {
+	for (const RID &grid : cell_light_probe_grid_owner.get_owned_list()) {
+		cell_light_probe_grid_owner.free(grid);
+	}
+
 	memdelete(forward_id_storage);
 
 	memdelete(bokeh_dof);
 	memdelete(copy_effects);
 	memdelete(debug_effects);
 	memdelete(luminance);
+	memdelete(cell_light_probe_convolver);
 	memdelete(smaa);
 	memdelete(tone_mapper);
 	memdelete(vrs);

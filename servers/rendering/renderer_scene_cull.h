@@ -663,6 +663,29 @@ public:
 
 	SelfList<InstanceReflectionProbeData>::List reflection_probe_render_list;
 
+	struct CellLightProbeCaptureRequest {
+		RID grid;
+		RID scenario;
+		uint32_t probe = 0;
+		uint32_t layer = 0;
+		Vector3 position;
+		float max_distance = 10.0f;
+		uint32_t cull_mask = 0xFFFFFFFF;
+		bool shadows = true;
+		uint32_t graph_distance = 0;
+		uint32_t player_distance = 0;
+		bool active_layer = true;
+		uint64_t insertion_order = 0;
+		Vector<RID> excluded_lights;
+	};
+
+	Vector<CellLightProbeCaptureRequest> cell_light_probe_capture_queue;
+	RID cell_light_probe_capture_atlas;
+	uint64_t cell_light_probe_capture_insertion_order = 0;
+	uint32_t cell_light_probe_capture_resolution = 16;
+	uint32_t cell_light_probe_captures_per_frame = 1;
+	void _render_cell_light_probe_capture();
+
 	struct InstanceParticlesCollisionData : public InstanceBaseData {
 		RID instance;
 		uint32_t cull_mask = 0xFFFFFFFF;
@@ -1144,6 +1167,7 @@ public:
 		const RendererSceneOcclusionCull::HZBuffer *occlusion_buffer;
 		const Projection *camera_matrix;
 		uint64_t visibility_viewport_mask;
+		const HashSet<RID> *excluded_lights = nullptr;
 	};
 
 	void _scene_cull_threaded(uint32_t p_thread, CullData *cull_data);
@@ -1153,7 +1177,7 @@ public:
 
 	bool _render_reflection_probe_step(Instance *p_instance, int p_step);
 
-	void _render_scene(const RendererSceneRender::CameraData *p_camera_data, const Ref<RenderSceneBuffers> &p_render_buffers, RID p_environment, RID p_force_camera_attributes, RID p_compositor, uint32_t p_visible_layers, RID p_scenario, RID p_viewport, RID p_shadow_atlas, RID p_reflection_probe, int p_reflection_probe_pass, float p_screen_mesh_lod_threshold, float p_window_output_max_value, bool p_using_shadows = true, RenderingServerTypes::RenderInfo *r_render_info = nullptr);
+	void _render_scene(const RendererSceneRender::CameraData *p_camera_data, const Ref<RenderSceneBuffers> &p_render_buffers, RID p_environment, RID p_force_camera_attributes, RID p_compositor, uint32_t p_visible_layers, RID p_scenario, RID p_viewport, RID p_shadow_atlas, RID p_reflection_probe, int p_reflection_probe_pass, float p_screen_mesh_lod_threshold, float p_window_output_max_value, bool p_using_shadows = true, RenderingServerTypes::RenderInfo *r_render_info = nullptr, const HashSet<RID> *p_excluded_lights = nullptr);
 	void render_empty_scene(const Ref<RenderSceneBuffers> &p_render_buffers, RID p_scenario, RID p_shadow_atlas, float p_window_output_max_value);
 
 	void render_camera(const Ref<RenderSceneBuffers> &p_render_buffers, RID p_camera, RID p_scenario, RID p_viewport, Size2 p_viewport_size, uint32_t p_jitter_phase_count, float p_screen_mesh_lod_threshold, RID p_shadow_atlas, Ref<XRInterface> &p_xr_interface, float p_window_output_max_value, RenderingServerTypes::RenderInfo *r_render_info = nullptr);
@@ -1223,6 +1247,8 @@ public:
 	PASS3(environment_set_bg_energy, RID, float, float)
 	PASS2(environment_set_canvas_max_layer, RID, int)
 	PASS6(environment_set_ambient_light, RID, const Color &, RSE::EnvironmentAmbientSource, float, float, RSE::EnvironmentReflectionSource)
+	PASS2(environment_set_cell_light_probe_grid, RID, RID)
+	PASS3(environment_set_cell_light_probes, RID, bool, float)
 	PASS2(environment_set_camera_feed_id, RID, int)
 
 	PASS1RC(RSE::EnvironmentBG, environment_get_background, RID)
@@ -1386,6 +1412,20 @@ public:
 
 	PASS0R(Ref<RenderSceneBuffers>, render_buffers_create)
 	PASS1(gi_set_use_half_resolution, bool)
+
+	/* Cell Light Probe Grid */
+	PASS0RC(bool, cell_light_probe_grid_is_supported)
+	RID cell_light_probe_grid_allocate() { return scene_render->cell_light_probe_grid_allocate(); }
+	PASS1(cell_light_probe_grid_initialize, RID)
+	PASS6(cell_light_probe_grid_configure, RID, uint32_t, uint32_t, const Vector3i &, const Vector3 &, const Vector3 &)
+	PASS2(cell_light_probe_grid_set_cell_indices, RID, const PackedInt32Array &)
+	PASS2(cell_light_probe_grid_set_edge_transmissibility, RID, const PackedFloat32Array &)
+	PASS2(cell_light_probe_grid_resolve, RID, const PackedFloat32Array &)
+	PASS1RC(uint64_t, cell_light_probe_grid_get_capture_generation, RID)
+	PASS1RC(uint64_t, cell_light_probe_grid_get_resolve_generation, RID)
+	PASS1RC(PackedColorArray, cell_light_probe_grid_debug_get_resolved_sh, RID)
+	virtual uint32_t cell_light_probe_grid_get_pending_capture_count(RID p_grid) const override;
+	virtual void cell_light_probe_grid_queue_capture(RID p_grid, RID p_scenario, uint32_t p_probe, uint32_t p_layer, const Vector3 &p_position, float p_max_distance, uint32_t p_cull_mask, bool p_shadows, uint32_t p_graph_distance, uint32_t p_player_distance, bool p_active_layer, const TypedArray<RID> &p_excluded_lights) override;
 
 	/* Misc */
 	PASS1(set_debug_draw_mode, RSE::ViewportDebugDraw)

@@ -40,6 +40,8 @@
 #include "servers/rendering/renderer_rd/effects/smaa.h"
 #include "servers/rendering/renderer_rd/effects/tone_mapper.h"
 #include "servers/rendering/renderer_rd/effects/vrs.h"
+#include "servers/rendering/renderer_rd/environment/cell_light_probe_convolver.h"
+#include "servers/rendering/renderer_rd/environment/cell_light_probe_grid_rd.h"
 #include "servers/rendering/renderer_rd/environment/gi.h"
 #include "servers/rendering/renderer_rd/environment/sky.h"
 #include "servers/rendering/renderer_rd/storage_rd/light_storage.h"
@@ -64,6 +66,9 @@ protected:
 	RendererRD::CopyEffects *copy_effects = nullptr;
 	RendererRD::DebugEffects *debug_effects = nullptr;
 	RendererRD::Luminance *luminance = nullptr;
+	RendererRD::CellLightProbeConvolver *cell_light_probe_convolver = nullptr;
+	mutable RID_Owner<RendererRD::CellLightProbeGridRD, true> cell_light_probe_grid_owner;
+	RID fallback_cell_light_probe_grid;
 	RendererRD::SMAA *smaa = nullptr;
 	RendererRD::ToneMapper *tone_mapper = nullptr;
 	RendererRD::FSR *fsr = nullptr;
@@ -339,6 +344,20 @@ public:
 	virtual PackedByteArray bake_render_area_light_atlas(const TypedArray<RID> &p_area_light_textures, const TypedArray<Rect2> &p_area_light_atlas_texture_rects, const Size2i &p_size, int p_mipmaps) override;
 
 	virtual bool free(RID p_rid) override;
+
+	virtual bool cell_light_probe_grid_is_supported() const override;
+	virtual bool cell_light_probe_grid_is_valid_capture_target(RID p_grid, uint32_t p_probe, uint32_t p_layer) const override;
+	virtual RID cell_light_probe_grid_allocate() override;
+	virtual void cell_light_probe_grid_initialize(RID p_grid) override;
+	virtual void cell_light_probe_grid_configure(RID p_grid, uint32_t p_probe_count, uint32_t p_layer_count, const Vector3i &p_dimensions, const Vector3 &p_origin, const Vector3 &p_cell_size) override;
+	virtual void cell_light_probe_grid_set_cell_indices(RID p_grid, const PackedInt32Array &p_cell_indices) override;
+	virtual void cell_light_probe_grid_set_edge_transmissibility(RID p_grid, const PackedFloat32Array &p_edge_transmissibility) override;
+	virtual void cell_light_probe_grid_resolve(RID p_grid, const PackedFloat32Array &p_layer_weights) override;
+	virtual uint64_t cell_light_probe_grid_get_capture_generation(RID p_grid) const override;
+	virtual uint64_t cell_light_probe_grid_get_resolve_generation(RID p_grid) const override;
+	virtual PackedColorArray cell_light_probe_grid_debug_get_resolved_sh(RID p_grid) const override;
+	virtual void cell_light_probe_grid_convolve_capture(RID p_grid, RID p_cubemap, uint32_t p_cubemap_size, uint32_t p_probe, uint32_t p_layer) override;
+	RendererRD::CellLightProbeGridRD *cell_light_probe_grid_get_for_environment(RID p_environment) const;
 
 	virtual void update() override;
 
