@@ -92,6 +92,10 @@ void SceneShaderForwardMobile::ShaderData::set_code(const String &p_code) {
 	int stencil_write_depth_faili = 0;
 	int stencil_comparei = STENCIL_COMPARE_ALWAYS;
 	int stencil_referencei = -1;
+	int stencil_front_passi = -1;
+	int stencil_back_passi = -1;
+	int stencil_front_depth_faili = -1;
+	int stencil_back_depth_faili = -1;
 
 	ShaderCompiler::IdentifierActions actions;
 	actions.entry_point_stages["vertex"] = ShaderCompiler::STAGE_VERTEX;
@@ -167,6 +171,42 @@ void SceneShaderForwardMobile::ShaderData::set_code(const String &p_code) {
 	actions.stencil_mode_values["compare_greater_or_equal"] = Pair<int *, int>(&stencil_comparei, STENCIL_COMPARE_GREATER_OR_EQUAL);
 	actions.stencil_mode_values["compare_always"] = Pair<int *, int>(&stencil_comparei, STENCIL_COMPARE_ALWAYS);
 
+	actions.stencil_mode_values["front_pass_keep"] = Pair<int *, int>(&stencil_front_passi, RD::STENCIL_OP_KEEP);
+	actions.stencil_mode_values["front_pass_zero"] = Pair<int *, int>(&stencil_front_passi, RD::STENCIL_OP_ZERO);
+	actions.stencil_mode_values["front_pass_replace"] = Pair<int *, int>(&stencil_front_passi, RD::STENCIL_OP_REPLACE);
+	actions.stencil_mode_values["front_pass_increment_and_clamp"] = Pair<int *, int>(&stencil_front_passi, RD::STENCIL_OP_INCREMENT_AND_CLAMP);
+	actions.stencil_mode_values["front_pass_decrement_and_clamp"] = Pair<int *, int>(&stencil_front_passi, RD::STENCIL_OP_DECREMENT_AND_CLAMP);
+	actions.stencil_mode_values["front_pass_invert"] = Pair<int *, int>(&stencil_front_passi, RD::STENCIL_OP_INVERT);
+	actions.stencil_mode_values["front_pass_increment_and_wrap"] = Pair<int *, int>(&stencil_front_passi, RD::STENCIL_OP_INCREMENT_AND_WRAP);
+	actions.stencil_mode_values["front_pass_decrement_and_wrap"] = Pair<int *, int>(&stencil_front_passi, RD::STENCIL_OP_DECREMENT_AND_WRAP);
+
+	actions.stencil_mode_values["back_pass_keep"] = Pair<int *, int>(&stencil_back_passi, RD::STENCIL_OP_KEEP);
+	actions.stencil_mode_values["back_pass_zero"] = Pair<int *, int>(&stencil_back_passi, RD::STENCIL_OP_ZERO);
+	actions.stencil_mode_values["back_pass_replace"] = Pair<int *, int>(&stencil_back_passi, RD::STENCIL_OP_REPLACE);
+	actions.stencil_mode_values["back_pass_increment_and_clamp"] = Pair<int *, int>(&stencil_back_passi, RD::STENCIL_OP_INCREMENT_AND_CLAMP);
+	actions.stencil_mode_values["back_pass_decrement_and_clamp"] = Pair<int *, int>(&stencil_back_passi, RD::STENCIL_OP_DECREMENT_AND_CLAMP);
+	actions.stencil_mode_values["back_pass_invert"] = Pair<int *, int>(&stencil_back_passi, RD::STENCIL_OP_INVERT);
+	actions.stencil_mode_values["back_pass_increment_and_wrap"] = Pair<int *, int>(&stencil_back_passi, RD::STENCIL_OP_INCREMENT_AND_WRAP);
+	actions.stencil_mode_values["back_pass_decrement_and_wrap"] = Pair<int *, int>(&stencil_back_passi, RD::STENCIL_OP_DECREMENT_AND_WRAP);
+
+	actions.stencil_mode_values["front_depth_fail_keep"] = Pair<int *, int>(&stencil_front_depth_faili, RD::STENCIL_OP_KEEP);
+	actions.stencil_mode_values["front_depth_fail_zero"] = Pair<int *, int>(&stencil_front_depth_faili, RD::STENCIL_OP_ZERO);
+	actions.stencil_mode_values["front_depth_fail_replace"] = Pair<int *, int>(&stencil_front_depth_faili, RD::STENCIL_OP_REPLACE);
+	actions.stencil_mode_values["front_depth_fail_increment_and_clamp"] = Pair<int *, int>(&stencil_front_depth_faili, RD::STENCIL_OP_INCREMENT_AND_CLAMP);
+	actions.stencil_mode_values["front_depth_fail_decrement_and_clamp"] = Pair<int *, int>(&stencil_front_depth_faili, RD::STENCIL_OP_DECREMENT_AND_CLAMP);
+	actions.stencil_mode_values["front_depth_fail_invert"] = Pair<int *, int>(&stencil_front_depth_faili, RD::STENCIL_OP_INVERT);
+	actions.stencil_mode_values["front_depth_fail_increment_and_wrap"] = Pair<int *, int>(&stencil_front_depth_faili, RD::STENCIL_OP_INCREMENT_AND_WRAP);
+	actions.stencil_mode_values["front_depth_fail_decrement_and_wrap"] = Pair<int *, int>(&stencil_front_depth_faili, RD::STENCIL_OP_DECREMENT_AND_WRAP);
+
+	actions.stencil_mode_values["back_depth_fail_keep"] = Pair<int *, int>(&stencil_back_depth_faili, RD::STENCIL_OP_KEEP);
+	actions.stencil_mode_values["back_depth_fail_zero"] = Pair<int *, int>(&stencil_back_depth_faili, RD::STENCIL_OP_ZERO);
+	actions.stencil_mode_values["back_depth_fail_replace"] = Pair<int *, int>(&stencil_back_depth_faili, RD::STENCIL_OP_REPLACE);
+	actions.stencil_mode_values["back_depth_fail_increment_and_clamp"] = Pair<int *, int>(&stencil_back_depth_faili, RD::STENCIL_OP_INCREMENT_AND_CLAMP);
+	actions.stencil_mode_values["back_depth_fail_decrement_and_clamp"] = Pair<int *, int>(&stencil_back_depth_faili, RD::STENCIL_OP_DECREMENT_AND_CLAMP);
+	actions.stencil_mode_values["back_depth_fail_invert"] = Pair<int *, int>(&stencil_back_depth_faili, RD::STENCIL_OP_INVERT);
+	actions.stencil_mode_values["back_depth_fail_increment_and_wrap"] = Pair<int *, int>(&stencil_back_depth_faili, RD::STENCIL_OP_INCREMENT_AND_WRAP);
+	actions.stencil_mode_values["back_depth_fail_decrement_and_wrap"] = Pair<int *, int>(&stencil_back_depth_faili, RD::STENCIL_OP_DECREMENT_AND_WRAP);
+
 	actions.stencil_reference = &stencil_referencei;
 
 	actions.uniforms = &uniforms;
@@ -209,6 +249,11 @@ void SceneShaderForwardMobile::ShaderData::set_code(const String &p_code) {
 	stencil_flags = stencil_readi | stencil_writei | stencil_write_depth_faili;
 	stencil_compare = StencilCompare(stencil_comparei);
 	stencil_reference = stencil_referencei;
+	stencil_custom_face_ops = stencil_front_passi >= 0 || stencil_back_passi >= 0 || stencil_front_depth_faili >= 0 || stencil_back_depth_faili >= 0;
+	stencil_front_pass = stencil_front_passi >= 0 ? RD::StencilOperation(stencil_front_passi) : RD::STENCIL_OP_KEEP;
+	stencil_back_pass = stencil_back_passi >= 0 ? RD::StencilOperation(stencil_back_passi) : RD::STENCIL_OP_KEEP;
+	stencil_front_depth_fail = stencil_front_depth_faili >= 0 ? RD::StencilOperation(stencil_front_depth_faili) : RD::STENCIL_OP_KEEP;
+	stencil_back_depth_fail = stencil_back_depth_faili >= 0 ? RD::StencilOperation(stencil_back_depth_faili) : RD::STENCIL_OP_KEEP;
 
 #ifdef DEBUG_ENABLED
 	if (uses_sss) {
@@ -370,6 +415,14 @@ void SceneShaderForwardMobile::ShaderData::_create_pipeline(PipelineKey p_pipeli
 
 		depth_stencil_state.front_op = op;
 		depth_stencil_state.back_op = op;
+		if (stencil_custom_face_ops) {
+			depth_stencil_state.front_op.pass = stencil_front_pass;
+			depth_stencil_state.front_op.depth_fail = stencil_front_depth_fail;
+			depth_stencil_state.back_op.pass = stencil_back_pass;
+			depth_stencil_state.back_op.depth_fail = stencil_back_depth_fail;
+			depth_stencil_state.front_op.write_mask = stencil_mask;
+			depth_stencil_state.back_op.write_mask = stencil_mask;
+		}
 	}
 
 	bool emulate_point_size_flag = uses_point_size && SceneShaderForwardMobile::singleton->emulate_point_size;

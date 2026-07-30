@@ -280,6 +280,13 @@ public:
 		uint32_t stencil_flags = 0;
 		StencilCompare stencil_compare = STENCIL_COMPARE_LESS;
 		uint32_t stencil_reference = 0;
+		// Separate face operations allow z-pass and z-fail volume counting without
+		// changing the behavior of legacy write/write_depth_fail stencil modes.
+		bool stencil_custom_face_ops = false;
+		RD::StencilOperation stencil_front_pass = RD::STENCIL_OP_KEEP;
+		RD::StencilOperation stencil_back_pass = RD::STENCIL_OP_KEEP;
+		RD::StencilOperation stencil_front_depth_fail = RD::STENCIL_OP_KEEP;
+		RD::StencilOperation stencil_back_depth_fail = RD::STENCIL_OP_KEEP;
 
 		uint64_t last_pass = 0;
 		uint32_t index = 0;

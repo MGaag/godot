@@ -263,6 +263,12 @@ ShaderTypes::ShaderTypes() {
 		shader_modes[RSE::SHADER_SPATIAL].stencil_modes.push_back({ PNAME("write") });
 		shader_modes[RSE::SHADER_SPATIAL].stencil_modes.push_back({ PNAME("write_depth_fail") });
 		shader_modes[RSE::SHADER_SPATIAL].stencil_modes.push_back({ PNAME("compare"), { "always", "less", "equal", "less_or_equal", "greater", "not_equal", "greater_or_equal" } });
+		// Volume techniques need opposite operations for front and back faces. Keep
+		// these generic so spatial shaders can implement caps, portals, and shadows.
+		shader_modes[RSE::SHADER_SPATIAL].stencil_modes.push_back({ PNAME("front_pass"), { "keep", "zero", "replace", "increment_and_clamp", "decrement_and_clamp", "invert", "increment_and_wrap", "decrement_and_wrap" } });
+		shader_modes[RSE::SHADER_SPATIAL].stencil_modes.push_back({ PNAME("back_pass"), { "keep", "zero", "replace", "increment_and_clamp", "decrement_and_clamp", "invert", "increment_and_wrap", "decrement_and_wrap" } });
+		shader_modes[RSE::SHADER_SPATIAL].stencil_modes.push_back({ PNAME("front_depth_fail"), { "keep", "zero", "replace", "increment_and_clamp", "decrement_and_clamp", "invert", "increment_and_wrap", "decrement_and_wrap" } });
+		shader_modes[RSE::SHADER_SPATIAL].stencil_modes.push_back({ PNAME("back_depth_fail"), { "keep", "zero", "replace", "increment_and_clamp", "decrement_and_clamp", "invert", "increment_and_wrap", "decrement_and_wrap" } });
 	}
 
 	/************ CANVAS ITEM **************************/
