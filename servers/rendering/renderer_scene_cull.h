@@ -679,10 +679,17 @@ public:
 		Vector<RID> excluded_lights;
 	};
 
+	// Scene-side capture scheduler. RendererSceneRenderRD owns persistent SH/grid
+	// data; cull owns scenario visibility, excluded lights, priority, and the
+	// transient atlas needed to render one queued cubemap safely.
 	Vector<CellLightProbeCaptureRequest> cell_light_probe_capture_queue;
 	RID cell_light_probe_capture_atlas;
 	uint64_t cell_light_probe_capture_insertion_order = 0;
+	// A 16-pixel face is sufficient for low-frequency SH9 and keeps six-view
+	// captures cheap; the project setting permits 8..64 after device profiling.
 	uint32_t cell_light_probe_capture_resolution = 16;
+	// One complete cubemap per frame avoids long spikes while guaranteeing each
+	// published capture contains all six faces from one scene generation.
 	uint32_t cell_light_probe_captures_per_frame = 1;
 	void _render_cell_light_probe_capture();
 

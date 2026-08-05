@@ -162,6 +162,8 @@ private:
 	float sdfgi_probe_bias = 1.1;
 	void _update_sdfgi();
 
+	// Opt-in artistic controls mirror other Environment GI features. The grid RID
+	// itself is runtime topology and therefore remains on RenderingServer.
 	bool cell_light_probes_enabled = false;
 	float cell_light_probes_energy = 1.0f;
 	void _update_cell_light_probes();

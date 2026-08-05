@@ -9,6 +9,11 @@
 #include "servers/rendering/renderer_rd/storage_rd/material_storage.h"
 #include "servers/rendering/renderer_rd/uniform_set_cache_rd.h"
 
+// Implements the ordered SSDM frame transform declared in ssdm.h. Resource
+// creation stays in process(), atomic compute work stays in _dispatch(), and the
+// final raster composite stays in apply_composite() so Mobile pass orchestration
+// can treat the effect like other RendererRD post-processes.
+
 using namespace RendererRD;
 
 void SSDM::_store_projection(const Projection &p_projection, float *r_values) {

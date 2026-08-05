@@ -340,8 +340,9 @@ public:
 	virtual void gi_set_use_half_resolution(bool p_enable) = 0;
 
 	// Grid-aligned diffuse probes are optional because the compatibility
-	// renderer has no storage-buffer implementation. The default methods keep
-	// that backend functional while RD renderers provide the native subsystem.
+	// Cell probes are an optional, complete renderer capability. A renderer with
+	// no storage-buffer implementation inherits inert defaults, while RD provides
+	// capture, convolution, resolution, and sampling as one native subsystem.
 	virtual bool cell_light_probe_grid_is_supported() const { return false; }
 	virtual bool cell_light_probe_grid_is_valid_capture_target(RID p_grid, uint32_t p_probe, uint32_t p_layer) const { return false; }
 	virtual RID cell_light_probe_grid_allocate() { return RID(); }

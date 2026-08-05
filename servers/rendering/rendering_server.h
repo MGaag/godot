@@ -374,6 +374,9 @@ public:
 
 	/* CELL LIGHT PROBE GRID API */
 
+	// Generic runtime indirect-light lattice. Callers define probe placement,
+	// topology, circuit layers, and capture priority; RD owns capture, SH storage,
+	// resolution, and shader publication. No game-specific room rules live here.
 	virtual bool cell_light_probe_grid_is_supported() const = 0;
 	virtual RID cell_light_probe_grid_create() = 0;
 	virtual void cell_light_probe_grid_configure(RID p_grid, uint32_t p_probe_count, uint32_t p_layer_count, const Vector3i &p_dimensions, const Vector3 &p_origin, const Vector3 &p_cell_size) = 0;

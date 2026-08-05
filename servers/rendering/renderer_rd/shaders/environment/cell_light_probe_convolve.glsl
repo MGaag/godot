@@ -4,8 +4,17 @@
 
 #VERSION_DEFINES
 
+// Projects a transient RGB capture cubemap into nine diffuse SH coefficients.
+// PROJECT_FACES creates workgroup partials; REDUCE_FACES sums those partials
+// into persistent probe storage and may subtract the permanent base to produce
+// a signed toggleable-circuit contribution.
+
+// Three SH bands retain useful directional diffuse light at a compact runtime cost.
 #define SH_COEFFICIENT_COUNT 9
+// RenderingDevice cubemaps always provide the six cardinal faces.
 #define CUBE_FACE_COUNT 6
+// 8x8 covers the default 16x16 face in four workgroups and stays portable across
+// the Mobile-class compute hardware targeted by this renderer.
 #define WORKGROUP_WIDTH 8
 #define WORKGROUP_SIZE (WORKGROUP_WIDTH * WORKGROUP_WIDTH)
 

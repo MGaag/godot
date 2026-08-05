@@ -7,6 +7,10 @@
 #include "servers/rendering/renderer_rd/storage_rd/material_storage.h"
 #include "servers/rendering/renderer_rd/uniform_set_cache_rd.h"
 
+// Converts one completed capture cubemap into persistent diffuse SH9 entirely
+// on the GPU. Projection creates workgroup partials; reduction writes the grid's
+// base record or a signed circuit contribution relative to that base.
+
 namespace RendererRD {
 
 CellLightProbeConvolver::CellLightProbeConvolver() {

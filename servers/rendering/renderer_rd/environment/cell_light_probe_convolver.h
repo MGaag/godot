@@ -9,6 +9,10 @@
 
 namespace RendererRD {
 
+// GPU reduction stage for cell-probe lighting. RendererSceneRenderRD supplies a
+// completed transient cubemap; CellLightProbeGridRD supplies persistent layer
+// storage. The shader implementation is cell_light_probe_convolve.glsl.
+
 // Reduces a transient lit cubemap to nine RGB spherical-harmonic coefficients
 // without copying image data back to the CPU. One small partial buffer is
 // shared by captures because the scheduler serializes convolution jobs.
@@ -23,6 +27,7 @@ class CellLightProbeConvolver {
 		uint32_t source_size;
 		uint32_t destination_offset;
 		uint32_t subtraction_offset;
+		// Stored as uint rather than bool to match std430 push-constant layout.
 		uint32_t subtract_existing;
 	};
 

@@ -343,6 +343,9 @@ public:
 
 	/* Cell Light Probe Grid */
 
+	// Renderer-method boundary for the RenderingServer contract. Backends either
+	// implement the complete grid lifecycle or report unsupported; partial shader
+	// behavior must never be inferred by game code.
 	virtual bool cell_light_probe_grid_is_supported() const = 0;
 	virtual RID cell_light_probe_grid_allocate() = 0;
 	virtual void cell_light_probe_grid_initialize(RID p_grid) = 0;

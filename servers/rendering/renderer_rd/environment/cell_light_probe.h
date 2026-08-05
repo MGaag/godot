@@ -12,8 +12,13 @@
 
 namespace RendererRD {
 
-// Stores diffuse irradiance in the nine coefficients of a third-order
-// spherical-harmonic basis. This compact representation is the persistent
+// CPU-side model and scheduling primitives for cell-probe indirect lighting.
+// RendererSceneRenderRD owns capture jobs, CellLightProbeConvolver converts each
+// cubemap to SH9, and CellLightProbeGridRD publishes the resolved GPU lattice.
+// None of these types know about CC rooms, doors, or ship modules.
+
+// Stores diffuse irradiance in nine coefficients: three spherical-harmonic
+// bands through second order. This compact representation is the persistent
 // output of a transient cubemap capture.
 struct CellLightSH9 {
 	static constexpr uint32_t COEFFICIENT_COUNT = 9;
@@ -38,7 +43,10 @@ using CellLightLayerID = uint32_t;
 static constexpr CellLightLayerID CELL_LIGHT_BASE_LAYER = 0;
 
 struct CellLightCircuitState {
+	// Circuits start dark until game code explicitly enables their stored bounce.
 	bool enabled = false;
+	// Unit energy preserves the captured contribution unless gameplay requests a
+	// deliberate indirect-only multiplier.
 	float energy = 1.0f;
 };
 
@@ -53,13 +61,16 @@ class CellLightProbe {
 	uint64_t resolve_generation = 0;
 
 public:
+	// Associates this record with a logical cell; it does not move GPU data.
 	void set_cell(const Vector3i &p_cell);
 	const Vector3i &get_cell() const;
 
+	// Atomically replaces one completed layer and advances the capture generation.
 	void commit_layer(CellLightLayerID p_layer, const CellLightSH9 &p_irradiance, uint64_t p_capture_generation);
 	bool has_layer(CellLightLayerID p_layer) const;
 	const CellLightSH9 *get_layer(CellLightLayerID p_layer) const;
 
+	// Rebuilds the visible SH record from the base plus enabled circuit deltas.
 	void resolve_layers(const HashMap<CellLightLayerID, CellLightCircuitState> &p_circuits);
 	const CellLightSH9 &get_resolved() const;
 	uint64_t get_capture_generation() const;
@@ -72,9 +83,14 @@ public:
 struct CellLightProbeUpdate {
 	Vector3i cell;
 	CellLightLayerID layer = CELL_LIGHT_BASE_LAYER;
+	// Zero means the edited cell itself; larger values are progressively less
+	// urgent according to the game-provided connectivity graph.
 	uint32_t graph_distance = 0;
+	// Zero means nearest the player's focus and therefore highest visual impact.
 	uint32_t player_distance = 0;
+	// Active layers sort ahead of hidden circuit layers at equal distances.
 	bool active_layer = true;
+	// FIFO order makes otherwise identical requests deterministic across runs.
 	uint64_t insertion_order = 0;
 };
 
@@ -85,7 +101,9 @@ class CellLightProbeScheduler {
 	static bool _is_higher_priority(const CellLightProbeUpdate &p_left, const CellLightProbeUpdate &p_right);
 
 public:
+	// Adds or upgrades a cell/layer request; duplicates never consume two captures.
 	void queue(const Vector3i &p_cell, CellLightLayerID p_layer, uint32_t p_graph_distance, uint32_t p_player_distance, bool p_active_layer);
+	// Removes the highest-impact request according to the documented stable order.
 	bool pop_next(CellLightProbeUpdate &r_update);
 	uint32_t get_pending_count() const;
 	void clear();

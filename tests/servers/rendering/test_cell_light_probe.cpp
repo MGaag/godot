@@ -4,6 +4,10 @@
 
 #include "tests/test_macros.h"
 
+// Focused CPU contract tests for cell-light math and scheduling. Live CC tests
+// cover RenderingDevice buffers and scene captures; these cases remain fast and
+// isolate layer composition, deterministic priority, topology, and bent-cone SH.
+
 TEST_FORCE_LINK(test_cell_light_probe)
 
 #include "servers/rendering/renderer_rd/environment/cell_light_probe.h"

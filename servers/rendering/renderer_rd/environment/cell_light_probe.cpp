@@ -4,6 +4,10 @@
 
 #include "cell_light_probe.h"
 
+// CPU reference math, completed-probe records, and deterministic scheduling for
+// cell lighting. GPU convolution/storage live in the adjacent convolver and grid
+// files; RendererSceneRenderRD owns the actual scene-capture lifecycle.
+
 namespace RendererRD {
 
 void CellLightSH9::clear() {

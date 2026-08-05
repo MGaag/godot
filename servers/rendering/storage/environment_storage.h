@@ -80,8 +80,11 @@ private:
 		float ambient_light_energy = 1.0;
 		float ambient_sky_contribution = 1.0;
 		RSE::EnvironmentReflectionSource reflection_source = RSE::ENV_REFLECTION_SOURCE_BG;
+		// Disabled by default so existing projects keep their established ambient
+		// result; unit energy preserves captured irradiance when explicitly enabled.
 		bool cell_light_probes_enabled = false;
 		float cell_light_probes_energy = 1.0f;
+		// Optional RID links one environment to one resolved runtime lattice.
 		RID cell_light_probe_grid;
 		int camera_feed_id = 0;
 

@@ -6,6 +6,10 @@
 
 #include "servers/rendering/renderer_rd/uniform_set_cache_rd.h"
 
+// Owns the GPU buffers sampled by Forward Mobile. Captures update private layer
+// records; resolve() composes into an inactive grid buffer and swaps only after
+// dispatch, preserving one coherent lighting generation on screen.
+
 namespace RendererRD {
 
 CellLightProbeGridRD::CellLightProbeGridRD() {

@@ -26,6 +26,8 @@ the fork maintainable and easy to rebase onto upstream Godot.
 
 ## Implementation
 
+-   Follow `../COMMENTING_GUIDE.md` for file summaries, API briefs,
+    default-value rationale, block comments, and the final comment sanity check.
 -   Before making significant architectural changes, explain the
     reasoning briefly.
 -   When multiple reasonable approaches exist, briefly explain the

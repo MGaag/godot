@@ -12,6 +12,11 @@
 
 namespace RendererRD {
 
+// RenderingDevice storage boundary for the cell-probe system. Scene capture and
+// scheduling live in RendererSceneRenderRD; this class owns only compact layer,
+// topology, metadata, and double-buffered resolved data consumed by Mobile
+// spatial shaders through cell_light_probe_sampling_inc.glsl.
+
 // Owns the GPU-resident radiance field for one logical probe lattice. Capture
 // layers and the two resolved generations are separate so incomplete work can
 // never become visible to spatial materials.
@@ -42,6 +47,8 @@ class CellLightProbeGridRD {
 	RID metadata_buffer;
 	RID cell_index_buffer;
 	RID edge_transmissibility_buffer;
+	// Buffer zero is initially visible; resolve() writes the other buffer before
+	// swapping, so materials never observe a partially updated generation.
 	uint32_t active_resolved_buffer = 0;
 	uint32_t probe_count = 0;
 	uint32_t layer_count = 0;
@@ -53,9 +60,13 @@ class CellLightProbeGridRD {
 	void _free_buffers();
 
 public:
+	// Allocates a complete immutable-shape lattice. Reconfigure only when probe or
+	// layer counts change; ordinary lighting edits update the existing buffers.
 	void configure(uint32_t p_probe_count, uint32_t p_layer_count, const Vector3i &p_dimensions, const Vector3 &p_origin, const Vector3 &p_cell_size, bool p_enabled = true);
 	bool is_configured() const;
+	// Uploads the lattice-to-probe lookup; -1 entries represent absent cells.
 	void set_cell_indices(const PackedInt32Array &p_cell_indices);
+	// Uploads four cardinal edge weights per lattice cell in +X, -X, +Z, -Z order.
 	void set_edge_transmissibility(const PackedFloat32Array &p_edge_transmissibility);
 
 	// Capture output is written to its private layer. Calling this method does

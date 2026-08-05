@@ -1,3 +1,8 @@
+// Forward Mobile sampling helpers for the resolved cell-light lattice. Buffer
+// declarations live in scene_forward_mobile_inc.glsl; this include locates four
+// probes, rejects wall/door crossings, interpolates SH9, and evaluates it through
+// the material's receiver-side bent cone.
+
 uint cell_light_flatten_coordinate(ivec3 coordinate)
 {
 	return uint(coordinate.x + coordinate.z * int(cell_light_probe_metadata.dimensions.x) + coordinate.y * int(cell_light_probe_metadata.dimensions.x * cell_light_probe_metadata.dimensions.z));

@@ -4,8 +4,14 @@
 
 #VERSION_DEFINES
 
+// Rebuilds one complete sampled field from the permanent base and signed circuit
+// layers. C++ writes an inactive buffer and publishes it only after this dispatch.
+
+// Each probe stores three spherical-harmonic bands through second order.
 #define SH_COEFFICIENT_COUNT 9
 
+// One invocation owns one coefficient; 64 threads maintain useful occupancy for
+// the intentionally small grids used by modular interiors.
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant, std430) uniform Params
