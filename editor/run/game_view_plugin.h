@@ -38,7 +38,9 @@
 #include "scene/gui/box_container.h"
 
 class EmbeddedProcessBase;
+class HScrollBar;
 class VSeparator;
+class VScrollBar;
 class WindowWrapper;
 class ScriptEditorDebugger;
 
@@ -130,6 +132,7 @@ class GameView : public VBoxContainer {
 		WINDOW_SIZE_MODE_FIXED,
 		WINDOW_SIZE_MODE_KEEP_ASPECT,
 		WINDOW_SIZE_MODE_STRETCH,
+		WINDOW_SIZE_MODE_PIXEL_EXACT,
 		WINDOW_SEPARATOR_DYNAMIC_RANGE,
 		WINDOW_REQUEST_HDR_OUTPUT,
 		WINDOW_HDR_OUTPUT_ERROR,
@@ -139,6 +142,7 @@ class GameView : public VBoxContainer {
 		SIZE_MODE_FIXED,
 		SIZE_MODE_KEEP_ASPECT,
 		SIZE_MODE_STRETCH,
+		SIZE_MODE_PIXEL_EXACT,
 	};
 
 	enum EmbedAvailability {
@@ -203,8 +207,13 @@ class GameView : public VBoxContainer {
 	HBoxContainer *game_hb = nullptr;
 	Button *game_embed_mode_button[EmbedMode::EMBED_TYPE_MAX];
 	Panel *panel = nullptr;
+	Control *embedded_process_clip = nullptr;
 	EmbeddedProcessBase *embedded_process = nullptr;
+	HScrollBar *embedded_h_scroll = nullptr;
+	VScrollBar *embedded_v_scroll = nullptr;
 	Label *state_label = nullptr;
+	Size2i embedded_process_content_size;
+	bool updating_embedded_scrollbars = false;
 
 	const int DEFAULT_TIME_SCALE_INDEX = 5;
 	Array time_scale_range = { 0.0625f, 0.125f, 0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 4.0f, 8.0f, 16.0f };
@@ -259,6 +268,8 @@ class GameView : public VBoxContainer {
 	void _update_embed_buttons();
 	void _update_game_window_size_label();
 	void _update_embed_window_size();
+	void _update_embedded_scrollbars();
+	void _embedded_scroll_changed(double p_value);
 	void _update_arguments_for_instance(int p_idx, List<String> &r_arguments);
 	void _show_update_window_wrapper();
 

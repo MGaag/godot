@@ -542,7 +542,7 @@ public:
 	virtual void window_start_drag(DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) override;
 	virtual void window_start_resize(DisplayServerEnums::WindowResizeEdge p_edge, DisplayServerEnums::WindowID p_window) override;
 
-	virtual Error embed_process(DisplayServerEnums::WindowID p_window, ProcessID p_pid, const Rect2i &p_rect, bool p_visible, bool p_grab_focus) override;
+	virtual Error embed_process(DisplayServerEnums::WindowID p_window, ProcessID p_pid, const Rect2i &p_rect, bool p_visible, bool p_grab_focus, const Rect2i &p_clip_rect = Rect2i()) override;
 	virtual Error request_close_embedded_process(ProcessID p_pid) override;
 	virtual Error remove_embedded_process(ProcessID p_pid) override;
 	virtual ProcessID get_focused_process_id() override;

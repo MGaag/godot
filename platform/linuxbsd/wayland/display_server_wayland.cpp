@@ -1757,7 +1757,7 @@ bool DisplayServerWayland::get_swap_cancel_ok() {
 	return swap_cancel_ok;
 }
 
-Error DisplayServerWayland::embed_process(DisplayServerEnums::WindowID p_window, ProcessID p_pid, const Rect2i &p_rect, bool p_visible, bool p_grab_focus) {
+Error DisplayServerWayland::embed_process(DisplayServerEnums::WindowID p_window, ProcessID p_pid, const Rect2i &p_rect, bool p_visible, bool p_grab_focus, const Rect2i &) {
 	MutexLock mutex_lock(wayland_thread.mutex);
 
 	struct godot_embedding_compositor *ec = wayland_thread.get_embedding_compositor();

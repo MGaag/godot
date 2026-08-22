@@ -45,9 +45,11 @@ protected:
 	Ref<StyleBox> focus_style_box;
 	Size2i window_size;
 	bool keep_aspect = false;
+	bool window_size_exact = false;
 	Point2i margin_top_left;
 	Point2i margin_bottom_right;
 	Window *window = nullptr;
+	Control *clip_control = nullptr;
 
 	bool transp_enabled = false;
 	Color clear_color;
@@ -73,8 +75,11 @@ public:
 
 	void set_window_size(const Size2i &p_window_size);
 	void set_keep_aspect(bool p_keep_aspect);
+	void set_window_size_exact(bool p_exact);
+	void set_clip_control(Control *p_clip_control);
 	virtual Rect2i get_adjusted_embedded_window_rect(const Rect2i &p_rect) const = 0;
 	Rect2i get_screen_embedded_window_rect() const;
+	Rect2i get_screen_embedded_window_clip_rect() const;
 	int get_margin_size(Side p_side) const;
 	Size2 get_margins_size() const;
 
@@ -101,6 +106,7 @@ class EmbeddedProcess : public EmbeddedProcessBase {
 	const int embedding_timeout = 45000;
 
 	Rect2i last_global_rect;
+	Rect2i last_global_clip_rect;
 
 	void _try_embed_process();
 	void _update_embedded_process();

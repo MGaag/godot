@@ -119,8 +119,36 @@ void EmbeddedProcessBase::set_keep_aspect(bool p_keep_aspect) {
 	}
 }
 
+void EmbeddedProcessBase::set_window_size_exact(bool p_exact) {
+	if (window_size_exact != p_exact) {
+		window_size_exact = p_exact;
+		queue_update_embedded_process();
+		queue_redraw();
+	}
+}
+
+void EmbeddedProcessBase::set_clip_control(Control *p_clip_control) {
+	if (clip_control != p_clip_control) {
+		clip_control = p_clip_control;
+		queue_update_embedded_process();
+		queue_redraw();
+	}
+}
+
 Rect2i EmbeddedProcessBase::get_screen_embedded_window_rect() const {
 	return get_adjusted_embedded_window_rect(get_global_rect());
+}
+
+Rect2i EmbeddedProcessBase::get_screen_embedded_window_clip_rect() const {
+	if (!clip_control) {
+		return Rect2i();
+	}
+
+	Rect2i clip_rect = clip_control->get_global_rect();
+	if (window) {
+		clip_rect.position += window->get_position();
+	}
+	return clip_rect;
 }
 
 int EmbeddedProcessBase::get_margin_size(Side p_side) const {
@@ -158,7 +186,7 @@ Rect2i EmbeddedProcess::get_adjusted_embedded_window_rect(const Rect2i &p_rect) 
 	}
 	if (window_size != Size2i()) {
 		Rect2i desired_rect;
-		if (!keep_aspect && control_rect.size.x >= window_size.x && control_rect.size.y >= window_size.y) {
+		if (window_size_exact || (!keep_aspect && control_rect.size.x >= window_size.x && control_rect.size.y >= window_size.y)) {
 			// Fixed at the desired size.
 			desired_rect.size = window_size;
 		} else {
@@ -242,7 +270,7 @@ void EmbeddedProcess::request_close() {
 
 void EmbeddedProcess::_try_embed_process() {
 	bool is_visible = is_visible_in_tree();
-	Error err = DisplayServer::get_singleton()->embed_process(window->get_window_id(), current_process_id, get_screen_embedded_window_rect(), is_visible, is_visible && application_has_focus && embedding_grab_focus);
+	Error err = DisplayServer::get_singleton()->embed_process(window->get_window_id(), current_process_id, get_screen_embedded_window_rect(), is_visible, is_visible && application_has_focus && embedding_grab_focus, get_screen_embedded_window_clip_rect());
 	if (err == OK) {
 		embedding_completed = true;
 		queue_redraw();
@@ -280,8 +308,10 @@ void EmbeddedProcess::_timer_update_embedded_process_timeout() {
 		// NOTIFICATION_RESIZED and NOTIFICATION_WM_POSITION_CHANGED are not enough to detect
 		// resized parent to siblings controls that can affect global position.
 		Rect2i new_global_rect = get_global_rect();
-		if (last_global_rect != new_global_rect) {
+		Rect2i new_global_clip_rect = get_screen_embedded_window_clip_rect();
+		if (last_global_rect != new_global_rect || last_global_clip_rect != new_global_clip_rect) {
 			last_global_rect = new_global_rect;
+			last_global_clip_rect = new_global_clip_rect;
 			queue_update_embedded_process();
 		}
 	}
@@ -301,7 +331,7 @@ void EmbeddedProcess::_update_embedded_process() {
 		last_updated_embedded_process_focused = focus;
 	}
 
-	DisplayServer::get_singleton()->embed_process(window->get_window_id(), current_process_id, get_screen_embedded_window_rect(), is_visible_in_tree(), must_grab_focus);
+	DisplayServer::get_singleton()->embed_process(window->get_window_id(), current_process_id, get_screen_embedded_window_rect(), is_visible_in_tree(), must_grab_focus, get_screen_embedded_window_clip_rect());
 }
 
 void EmbeddedProcess::_timer_embedding_timeout() {
@@ -364,6 +394,10 @@ void EmbeddedProcess::_check_mouse_over() {
 
 	Vector2 mouse_position = DisplayServer::get_singleton()->mouse_get_position();
 	Rect2i window_rect = get_screen_embedded_window_rect();
+	Rect2i clip_rect = get_screen_embedded_window_clip_rect();
+	if (clip_rect != Rect2i()) {
+		window_rect = window_rect.intersection(clip_rect);
+	}
 	if (!window_rect.has_point(mouse_position)) {
 		return;
 	}

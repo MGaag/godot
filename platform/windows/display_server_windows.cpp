@@ -3562,7 +3562,7 @@ void DisplayServerWindows::_legacy_update_hdr_output_for_tracked_windows(bool p_
 	}
 }
 
-Error DisplayServerWindows::embed_process(DisplayServerEnums::WindowID p_window, ProcessID p_pid, const Rect2i &p_rect, bool p_visible, bool p_grab_focus) {
+Error DisplayServerWindows::embed_process(DisplayServerEnums::WindowID p_window, ProcessID p_pid, const Rect2i &p_rect, bool p_visible, bool p_grab_focus, const Rect2i &p_clip_rect) {
 	_THREAD_SAFE_METHOD_
 
 	ERR_FAIL_COND_V(!windows.has(p_window), FAILED);
@@ -3597,9 +3597,31 @@ Error DisplayServerWindows::embed_process(DisplayServerEnums::WindowID p_window,
 	// We need to adjust for this when a screen is positioned in the negative space
 	// (e.g., a screen to the left of the main screen).
 	const Rect2i adjusted_rect = Rect2i(p_rect.position + _get_screens_origin(), p_rect.size);
+	const Rect2i adjusted_clip_rect = p_clip_rect == Rect2i() ? Rect2i() : Rect2i(p_clip_rect.position + _get_screens_origin(), p_clip_rect.size);
+	const Rect2i visible_rect = adjusted_clip_rect == Rect2i() ? adjusted_rect : adjusted_rect.intersection(adjusted_clip_rect);
+	const bool needs_clip_region = visible_rect != adjusted_rect;
+	const Rect2i clip_region = Rect2i(visible_rect.position - adjusted_rect.position, visible_rect.size);
+
+	if (adjusted_clip_rect != Rect2i() && visible_rect.get_area() == 0) {
+		p_visible = false;
+	}
 
 	// Use HWND_BOTTOM to prevent reordering of the embedded window over another popup.
 	SetWindowPos(ep->window_handle, HWND_BOTTOM, adjusted_rect.position.x, adjusted_rect.position.y, adjusted_rect.size.x, adjusted_rect.size.y, SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+
+	if (ep->has_clip_region != needs_clip_region || (needs_clip_region && ep->clip_region != clip_region)) {
+		HRGN region = nullptr;
+		if (needs_clip_region) {
+			region = CreateRectRgn(clip_region.position.x, clip_region.position.y, clip_region.get_end().x, clip_region.get_end().y);
+		}
+
+		if (SetWindowRgn(ep->window_handle, region, TRUE) != 0) {
+			ep->has_clip_region = needs_clip_region;
+			ep->clip_region = clip_region;
+		} else if (region) {
+			DeleteObject(region);
+		}
+	}
 
 	if (ep->is_visible != p_visible) {
 		if (p_visible) {

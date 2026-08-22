@@ -545,6 +545,8 @@ class DisplayServerWindows : public DisplayServer {
 		HWND window_handle = nullptr;
 		HWND parent_window_handle = nullptr;
 		bool is_visible = false;
+		bool has_clip_region = false;
+		Rect2i clip_region;
 	};
 	HashMap<ProcessID, EmbeddedProcessData *> embedded_processes;
 
@@ -740,7 +742,8 @@ public:
 	virtual bool get_swap_cancel_ok() override;
 
 	virtual void enable_for_stealing_focus(ProcessID pid) override;
-	virtual Error embed_process(DisplayServerEnums::WindowID p_window, ProcessID p_pid, const Rect2i &p_rect, bool p_visible, bool p_grab_focus) override;
+	virtual bool is_embedded_process_clipping_supported() const override { return true; }
+	virtual Error embed_process(DisplayServerEnums::WindowID p_window, ProcessID p_pid, const Rect2i &p_rect, bool p_visible, bool p_grab_focus, const Rect2i &p_clip_rect = Rect2i()) override;
 	virtual Error request_close_embedded_process(ProcessID p_pid) override;
 	virtual Error remove_embedded_process(ProcessID p_pid) override;
 	virtual ProcessID get_focused_process_id() override;

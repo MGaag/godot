@@ -55,6 +55,7 @@
 #include "scene/gui/label.h"
 #include "scene/gui/menu_button.h"
 #include "scene/gui/panel.h"
+#include "scene/gui/scroll_bar.h"
 #include "scene/gui/separator.h"
 #include "scene/main/scene_tree.h"
 #include "servers/display/display_server.h"
@@ -805,7 +806,8 @@ void GameView::_game_window_options_menu_menu_id_pressed(int p_id) {
 	switch (p_id) {
 		case WINDOW_SIZE_MODE_FIXED:
 		case WINDOW_SIZE_MODE_KEEP_ASPECT:
-		case WINDOW_SIZE_MODE_STRETCH: {
+		case WINDOW_SIZE_MODE_STRETCH:
+		case WINDOW_SIZE_MODE_PIXEL_EXACT: {
 			switch (p_id) {
 				case WINDOW_SIZE_MODE_FIXED: {
 					embed_size_mode = EmbedSizeMode::SIZE_MODE_FIXED;
@@ -815,6 +817,9 @@ void GameView::_game_window_options_menu_menu_id_pressed(int p_id) {
 				} break;
 				case WINDOW_SIZE_MODE_STRETCH: {
 					embed_size_mode = EmbedSizeMode::SIZE_MODE_STRETCH;
+				} break;
+				case WINDOW_SIZE_MODE_PIXEL_EXACT: {
+					embed_size_mode = EmbedSizeMode::SIZE_MODE_PIXEL_EXACT;
 				} break;
 			}
 			EditorSettings::get_singleton()->set_project_metadata("game_view", "embed_size_mode", embed_size_mode);
@@ -1000,6 +1005,10 @@ void GameView::_update_embed_menu_options() {
 	menu->set_item_checked(menu->get_item_index(WINDOW_SIZE_MODE_FIXED), embed_size_mode == SIZE_MODE_FIXED);
 	menu->set_item_checked(menu->get_item_index(WINDOW_SIZE_MODE_KEEP_ASPECT), embed_size_mode == SIZE_MODE_KEEP_ASPECT);
 	menu->set_item_checked(menu->get_item_index(WINDOW_SIZE_MODE_STRETCH), embed_size_mode == SIZE_MODE_STRETCH);
+	int pixel_exact_index = menu->get_item_index(WINDOW_SIZE_MODE_PIXEL_EXACT);
+	if (pixel_exact_index >= 0) {
+		menu->set_item_checked(pixel_exact_index, embed_size_mode == SIZE_MODE_PIXEL_EXACT);
+	}
 }
 
 void GameView::_update_embed_buttons() {
@@ -1024,25 +1033,117 @@ void GameView::_update_game_window_size_label() {
 }
 
 void GameView::_update_embed_window_size() {
+	bool pixel_exact = embed_size_mode == SIZE_MODE_PIXEL_EXACT && DisplayServer::get_singleton()->is_embedded_process_clipping_supported();
+	Size2i desired_window_size;
+
 	if (paused) {
 		// When paused, Godot does not re-render. As a result, resizing the game window to a larger size
 		// causes artifacts and flickering. However, resizing to a smaller size seems fine.
 		// To prevent artifacts and flickering, we will force the game window to maintain its size.
 		// Using the same technique as SIZE_MODE_FIXED, the embedded process control will
 		// prevent resizing the game to a larger size while maintaining the aspect ratio.
-		embedded_process->set_window_size(size_paused);
+		desired_window_size = size_paused;
+		embedded_process->set_window_size(desired_window_size);
 		embedded_process->set_keep_aspect(false);
 
 	} else {
-		if (embed_size_mode == SIZE_MODE_FIXED || embed_size_mode == SIZE_MODE_KEEP_ASPECT) {
+		if (embed_size_mode == SIZE_MODE_FIXED || embed_size_mode == SIZE_MODE_KEEP_ASPECT || pixel_exact) {
 			// The embedded process control will need the desired window size.
 			EditorRun::WindowPlacement placement = EditorRun::get_window_placement();
-			embedded_process->set_window_size(placement.size);
+			desired_window_size = placement.size;
+			embedded_process->set_window_size(desired_window_size);
 		} else {
 			// Stretch... No need for the window size.
 			embedded_process->set_window_size(Size2i());
 		}
 		embedded_process->set_keep_aspect(embed_size_mode == SIZE_MODE_KEEP_ASPECT);
+	}
+
+	embedded_process->set_window_size_exact(pixel_exact);
+	embedded_process_content_size = pixel_exact ? desired_window_size + Size2i(embedded_process->get_margins_size()) : Size2i();
+	_update_embedded_scrollbars();
+}
+
+void GameView::_update_embedded_scrollbars() {
+	if (!panel || !embedded_process_clip || !embedded_h_scroll || !embedded_v_scroll || updating_embedded_scrollbars) {
+		return;
+	}
+
+	updating_embedded_scrollbars = true;
+
+	const bool pixel_exact = embed_size_mode == SIZE_MODE_PIXEL_EXACT && DisplayServer::get_singleton()->is_embedded_process_clipping_supported();
+	const Size2i panel_size = Size2i(panel->get_size()).maxi(1);
+	Size2i viewport_size = panel_size;
+
+	if (pixel_exact && embedded_process_content_size.x > 0 && embedded_process_content_size.y > 0) {
+		const int h_scroll_height = MAX((int)embedded_h_scroll->get_combined_minimum_size().y, 1);
+		const int v_scroll_width = MAX((int)embedded_v_scroll->get_combined_minimum_size().x, 1);
+
+		bool show_h_scroll = embedded_process_content_size.x > viewport_size.x;
+		bool show_v_scroll = embedded_process_content_size.y > viewport_size.y;
+		if (show_v_scroll) {
+			show_h_scroll = show_h_scroll || embedded_process_content_size.x > viewport_size.x - v_scroll_width;
+		}
+		if (show_h_scroll) {
+			show_v_scroll = show_v_scroll || embedded_process_content_size.y > viewport_size.y - h_scroll_height;
+		}
+
+		viewport_size.x = MAX(viewport_size.x - (show_v_scroll ? v_scroll_width : 0), 1);
+		viewport_size.y = MAX(viewport_size.y - (show_h_scroll ? h_scroll_height : 0), 1);
+
+		embedded_h_scroll->set_visible(show_h_scroll);
+		embedded_v_scroll->set_visible(show_v_scroll);
+		embedded_h_scroll->set_position(Point2i(0, viewport_size.y));
+		embedded_h_scroll->set_size(Size2i(viewport_size.x, h_scroll_height));
+		embedded_v_scroll->set_position(Point2i(viewport_size.x, 0));
+		embedded_v_scroll->set_size(Size2i(v_scroll_width, viewport_size.y));
+
+		embedded_h_scroll->set_min(0);
+		embedded_h_scroll->set_max(embedded_process_content_size.x);
+		embedded_h_scroll->set_page(viewport_size.x);
+		embedded_v_scroll->set_min(0);
+		embedded_v_scroll->set_max(embedded_process_content_size.y);
+		embedded_v_scroll->set_page(viewport_size.y);
+
+		if (!show_h_scroll) {
+			embedded_h_scroll->set_value(0);
+		}
+		if (!show_v_scroll) {
+			embedded_v_scroll->set_value(0);
+		}
+
+		embedded_process_clip->set_position(Point2i());
+		embedded_process_clip->set_size(viewport_size);
+
+		Point2i content_position(-embedded_h_scroll->get_value(), -embedded_v_scroll->get_value());
+		if (!show_h_scroll) {
+			content_position.x = (viewport_size.x - embedded_process_content_size.x) / 2;
+		}
+		if (!show_v_scroll) {
+			content_position.y = (viewport_size.y - embedded_process_content_size.y) / 2;
+		}
+		embedded_process->set_position(content_position);
+		embedded_process->set_size(embedded_process_content_size);
+		embedded_process->set_clip_control(embedded_process_clip);
+	} else {
+		embedded_h_scroll->hide();
+		embedded_v_scroll->hide();
+		embedded_h_scroll->set_value(0);
+		embedded_v_scroll->set_value(0);
+		embedded_process_clip->set_position(Point2i());
+		embedded_process_clip->set_size(panel_size);
+		embedded_process->set_position(Point2i());
+		embedded_process->set_size(panel_size);
+		embedded_process->set_clip_control(nullptr);
+	}
+
+	updating_embedded_scrollbars = false;
+	embedded_process->queue_update_embedded_process();
+}
+
+void GameView::_embedded_scroll_changed(double) {
+	if (!updating_embedded_scrollbars) {
+		_update_embedded_scrollbars();
 	}
 }
 
@@ -1196,6 +1297,7 @@ void GameView::_notification(int p_what) {
 			_update_speed_state_icon(time_scale_index);
 			_update_speed_state_size();
 			_update_speed_state_color();
+			callable_mp(this, &GameView::_update_embed_window_size).call_deferred();
 		} break;
 
 		case NOTIFICATION_READY: {
@@ -1220,9 +1322,14 @@ void GameView::_notification(int p_what) {
 						make_floating_on_play = EditorSettings::get_singleton()->get_project_metadata("game_view", "make_floating_on_play", false);
 					} break;
 				}
-				embed_size_mode = (EmbedSizeMode)(int)EditorSettings::get_singleton()->get_project_metadata("game_view", "embed_size_mode", SIZE_MODE_FIXED);
+				int saved_embed_size_mode = EditorSettings::get_singleton()->get_project_metadata("game_view", "embed_size_mode", SIZE_MODE_FIXED);
+				if (saved_embed_size_mode < SIZE_MODE_FIXED || saved_embed_size_mode > SIZE_MODE_PIXEL_EXACT || (saved_embed_size_mode == SIZE_MODE_PIXEL_EXACT && !DisplayServer::get_singleton()->is_embedded_process_clipping_supported())) {
+					saved_embed_size_mode = SIZE_MODE_FIXED;
+				}
+				embed_size_mode = (EmbedSizeMode)saved_embed_size_mode;
 				_update_embed_buttons();
 				_update_embed_menu_options();
+				_update_embed_window_size();
 
 				EditorRunBar::get_singleton()->connect("play_pressed", callable_mp(this, &GameView::_play_pressed));
 				EditorRunBar::get_singleton()->connect("stop_pressed", callable_mp(this, &GameView::_stop_pressed));
@@ -1716,14 +1823,21 @@ GameView::GameView(Ref<GameViewDebugger> p_debugger, EmbeddedProcessBase *p_embe
 	menu->set_item_tooltip(menu->get_item_index(WINDOW_SIZE_MODE_KEEP_ASPECT), TTRC("Keep the aspect ratio of the embedded game."));
 	menu->add_radio_check_item(TTRC("Stretch to Fit"), WINDOW_SIZE_MODE_STRETCH);
 	menu->set_item_tooltip(menu->get_item_index(WINDOW_SIZE_MODE_STRETCH), TTRC("Embedded game size stretches to fit the Game workspace."));
+	if (DisplayServer::get_singleton()->is_embedded_process_clipping_supported()) {
+		menu->add_radio_check_item(TTRC("1:1 Pixel Size (Scrollable)"), WINDOW_SIZE_MODE_PIXEL_EXACT);
+		menu->set_item_tooltip(menu->get_item_index(WINDOW_SIZE_MODE_PIXEL_EXACT), TTRC("Keep the embedded game at its project window size without scaling.\nScroll bars are shown when it does not fit in the Game workspace."));
+	}
 
 	panel = memnew(Panel);
 	add_child(panel);
 	panel->set_theme_type_variation("GamePanel");
 	panel->set_v_size_flags(SIZE_EXPAND_FILL);
+	panel->connect(SceneStringName(resized), callable_mp(this, &GameView::_update_embedded_scrollbars));
 
-	panel->add_child(embedded_process);
-	embedded_process->set_anchors_and_offsets_preset(PRESET_FULL_RECT);
+	embedded_process_clip = memnew(Control);
+	panel->add_child(embedded_process_clip);
+	embedded_process_clip->set_clip_contents(true);
+	embedded_process_clip->add_child(embedded_process);
 	embedded_process->connect("embedding_failed", callable_mp(this, &GameView::_embedding_failed));
 	embedded_process->connect("embedding_completed", callable_mp(this, &GameView::_embedding_completed));
 	embedded_process->connect("embedded_process_focused", callable_mp(this, &GameView::_embedded_process_focused));
@@ -1744,6 +1858,18 @@ GameView::GameView(Ref<GameViewDebugger> p_debugger, EmbeddedProcessBase *p_embe
 	state_label->set_vertical_alignment(VERTICAL_ALIGNMENT_CENTER);
 	state_label->set_autowrap_mode(TextServer::AUTOWRAP_WORD);
 	state_label->set_anchors_and_offsets_preset(PRESET_FULL_RECT);
+
+	embedded_h_scroll = memnew(HScrollBar);
+	panel->add_child(embedded_h_scroll);
+	embedded_h_scroll->set_step(1);
+	embedded_h_scroll->connect(SceneStringName(value_changed), callable_mp(this, &GameView::_embedded_scroll_changed));
+	embedded_h_scroll->hide();
+
+	embedded_v_scroll = memnew(VScrollBar);
+	panel->add_child(embedded_v_scroll);
+	embedded_v_scroll->set_step(1);
+	embedded_v_scroll->connect(SceneStringName(value_changed), callable_mp(this, &GameView::_embedded_scroll_changed));
+	embedded_v_scroll->hide();
 
 	_camera_override_menu_id_pressed(EditorSettings::get_singleton()->get_project_metadata("game_view", "camera_override_mode", 0));
 	_update_debugger_buttons();
