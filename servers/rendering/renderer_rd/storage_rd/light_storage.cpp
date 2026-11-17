@@ -50,7 +50,8 @@ LightStorage::LightStorage() {
 
 	TextureStorage *texture_storage = TextureStorage::get_singleton();
 
-	directional_shadow.size = GLOBAL_GET("rendering/lights_and_shadows/directional_shadow/size");
+	directional_shadow.resolution = GLOBAL_GET("rendering/lights_and_shadows/directional_shadow/size");
+	directional_shadow.size = Math::nearest_power_of_2_templated(directional_shadow.resolution);
 	directional_shadow.use_16_bits = GLOBAL_GET("rendering/lights_and_shadows/directional_shadow/16_bits");
 
 	using_lightmap_array = true; // high end
@@ -813,6 +814,10 @@ void LightStorage::update_light_buffers(RenderDataRD *p_render_data, const Paged
 					light_data.blend_splits = (smode != RSE::LIGHT_DIRECTIONAL_SHADOW_ORTHOGONAL) && light->directional_blend_splits;
 					for (int j = 0; j < 4; j++) {
 						Rect2 atlas_rect = light_instance->shadow_transform[j].atlas_rect;
+						light_data.shadow_atlas_rects[j][0] = atlas_rect.position.x;
+						light_data.shadow_atlas_rects[j][1] = atlas_rect.position.y;
+						light_data.shadow_atlas_rects[j][2] = atlas_rect.get_end().x;
+						light_data.shadow_atlas_rects[j][3] = atlas_rect.get_end().y;
 						Projection correction;
 						correction.set_depth_correction(false, true, false);
 						Projection matrix = correction * light_instance->shadow_transform[j].camera;
@@ -2767,18 +2772,28 @@ void LightStorage::update_directional_shadow_atlas() {
 		fb_tex.push_back(directional_shadow.depth);
 		directional_shadow.fb = RD::get_singleton()->framebuffer_create(fb_tex);
 	}
+	if (directional_shadow.depth.is_valid() && directional_shadow.needs_clear) {
+		RD::get_singleton()->draw_list_begin(directional_shadow.fb, RD::DRAW_CLEAR_DEPTH, Vector<Color>(), 0.0f);
+		RD::get_singleton()->draw_list_end();
+		directional_shadow.needs_clear = false;
+	}
 }
+// Continuous active resolution shares the smallest sufficient backing texture.
+// Sampling uses backing texels; light fitting and raster rectangles use active texels.
 void LightStorage::directional_shadow_atlas_set_size(int p_size, bool p_16_bits) {
-	p_size = Math::nearest_power_of_2_templated(p_size);
-
-	if (directional_shadow.size == p_size && directional_shadow.use_16_bits == p_16_bits) {
+	ERR_FAIL_COND(p_size < 0);
+	if (directional_shadow.resolution == p_size && directional_shadow.use_16_bits == p_16_bits) {
 		return;
 	}
-
-	directional_shadow.size = p_size;
+	const int backing_size = Math::nearest_power_of_2_templated(p_size);
+	const bool reallocate = directional_shadow.size != backing_size || directional_shadow.use_16_bits != p_16_bits;
+	directional_shadow.resolution = p_size;
+	directional_shadow.size = backing_size;
 	directional_shadow.use_16_bits = p_16_bits;
-
-	if (directional_shadow.depth.is_valid()) {
+	// A shrinking region must not expose stale border depths to filtered reads.
+	// Clear once per resolution change; steady frames clear only the active rect.
+	directional_shadow.needs_clear = true;
+	if (reallocate && directional_shadow.depth.is_valid()) {
 		RD::get_singleton()->free_rid(directional_shadow.depth);
 		directional_shadow.depth = RID();
 		RendererSceneRenderRD::get_singleton()->base_uniforms_changed();
@@ -2813,13 +2828,13 @@ static Rect2i _get_directional_shadow_rect(int p_size, int p_shadow_count, int p
 }
 
 Rect2i LightStorage::get_directional_shadow_rect() {
-	return _get_directional_shadow_rect(directional_shadow.size, directional_shadow.light_count, directional_shadow.current_light);
+	return _get_directional_shadow_rect(directional_shadow.resolution, directional_shadow.light_count, directional_shadow.current_light);
 }
 
 int LightStorage::get_directional_light_shadow_size(RID p_light_instance) {
 	ERR_FAIL_COND_V(directional_shadow.light_count == 0, 0);
 
-	Rect2i r = _get_directional_shadow_rect(directional_shadow.size, directional_shadow.light_count, 0);
+	Rect2i r = _get_directional_shadow_rect(directional_shadow.resolution, directional_shadow.light_count, 0);
 
 	LightInstance *light_instance = light_instance_owner.get_or_null(p_light_instance);
 	ERR_FAIL_NULL_V(light_instance, 0);

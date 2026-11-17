@@ -47,6 +47,8 @@
 #include "servers/rendering/rendering_server_types.h"
 #include "servers/rendering/storage/utilities.h"
 
+// Owns scene instances and backend geometry publication; diagnostic labels survive geometry rebuilds without invalidating rendering. Backends own draw timing.
+
 class RenderingLightCuller;
 
 class RendererSceneCull : public RenderingMethod {
@@ -337,6 +339,9 @@ public:
 
 		List<Instance *> directional_lights;
 		RID environment;
+		Vector2 shadow_receiver_height_range; // World-owned envelope, independent of visible objects.
+		bool shadow_camera_query = false;
+		real_t shadow_query_padding = 0.5;
 		RID fallback_environment;
 		RID camera_attributes;
 		RID compositor;
@@ -372,6 +377,9 @@ public:
 	virtual RID scenario_allocate();
 	virtual void scenario_initialize(RID p_rid);
 
+	// Publish the stable world receiver envelope without changing camera clipping or caster residency.
+	virtual void scenario_set_shadow_receiver_height_range(RID p_scenario, const Vector2 &p_range) override;
+	virtual void scenario_set_shadow_caster_query(RID p_scenario, bool p_camera_query, float p_padding) override;
 	virtual void scenario_set_environment(RID p_scenario, RID p_environment);
 	virtual void scenario_set_camera_attributes(RID p_scenario, RID p_attributes);
 	virtual void scenario_set_fallback_environment(RID p_scenario, RID p_environment);
@@ -400,6 +408,8 @@ public:
 	};
 
 	struct Instance {
+		StringName profile_label; // Canonical diagnostic ownership; survives renderer geometry rebuilds.
+		RenderGeometryInstance::GPUPlacementCulling gpu_placement_culling;
 		RSE::InstanceType base_type;
 		RID base;
 
@@ -1072,6 +1082,9 @@ public:
 	virtual void instance_set_visibility_parent(RID p_instance, RID p_parent_instance);
 
 	virtual void instance_set_ignore_culling(RID p_instance, bool p_enabled);
+	// Updates diagnostic ownership only, including any current backend geometry view.
+	virtual void instance_set_profile_label(RID p_instance, const StringName &p_label) override;
+	virtual void instance_set_gpu_placement_culling(RID p_instance, RID p_positions, RID p_visible_multimesh, const Vector4 &p_origin_tile_height, float p_radius, float p_center_height) override;
 
 	bool _update_instance_visibility_depth(Instance *p_instance);
 	void _update_instance_visibility_dependencies(Instance *p_instance) const;
@@ -1105,7 +1118,8 @@ public:
 	_FORCE_INLINE_ void _update_instance_lightmap_captures(Instance *p_instance) const;
 	void _unpair_instance(Instance *p_instance);
 
-	void _light_instance_setup_directional_shadow(int p_shadow_index, Instance *p_instance, const Transform3D p_cam_transform, const Projection &p_cam_projection, bool p_cam_orthogonal, bool p_cam_vaspect);
+	// Fit single orthographic maps to visible receivers and retain lightward offscreen casters.
+	void _light_instance_setup_directional_shadow(int p_shadow_index, Instance *p_instance, const Transform3D p_cam_transform, const Projection &p_cam_projection, bool p_cam_orthogonal, bool p_cam_vaspect, const Vector<Vector3> &p_receivers, Scenario *p_scenario, uint32_t p_visible_layers);
 
 	_FORCE_INLINE_ bool _light_instance_update_shadow(Instance *p_instance, const Transform3D p_cam_transform, const Projection &p_cam_projection, bool p_cam_orthogonal, bool p_cam_vaspect, RID p_shadow_atlas, Scenario *p_scenario, float p_screen_mesh_lod_threshold, uint32_t p_visible_layers = 0xFFFFFF);
 
@@ -1118,6 +1132,7 @@ public:
 			uint32_t caster_mask;
 			struct Cascade {
 				Frustum frustum;
+				Vector<Plane> caster_query_planes;
 
 				Projection projection;
 				Transform3D transform;
@@ -1217,6 +1232,7 @@ public:
 	PASS2(sky_set_mode, RID, RSE::SkyMode)
 	PASS2(sky_set_material, RID, RID)
 	PASS4R(Ref<Image>, sky_bake_panorama, RID, float, bool, const Size2i &)
+	PASS1R(RID, sky_get_cosine_cone_texture_rd, RID)
 
 	// Compositor effect
 

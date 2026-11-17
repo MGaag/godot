@@ -39,6 +39,8 @@
 #include "servers/rendering/rendering_server_enums.h"
 #include "servers/rendering/rendering_server_types.h"
 
+// Defines rendering APIs and bindings; diagnostic labels and opt-in pipeline sampling preserve normal rendering state. RenderingServerDefault queues mutations to their owners.
+
 namespace Geometry3D {
 struct MeshData;
 }
@@ -261,6 +263,8 @@ public:
 	virtual int multimesh_get_instance_count(RID p_multimesh) const = 0;
 
 	virtual void multimesh_set_mesh(RID p_multimesh, RID p_mesh) = 0;
+	// Select existing imported LOD indices without changing GPU-owned instance counts.
+	virtual void multimesh_set_mesh_lod(RID p_multimesh, int p_lod) = 0;
 	virtual void multimesh_instance_set_transform(RID p_multimesh, int p_index, const Transform3D &p_transform) = 0;
 	virtual void multimesh_instance_set_transform_2d(RID p_multimesh, int p_index, const Transform2D &p_transform) = 0;
 	virtual void multimesh_instance_set_color(RID p_multimesh, int p_index, const Color &p_color) = 0;
@@ -580,6 +584,9 @@ public:
 
 	virtual void viewport_set_clear_mode(RID p_viewport, RSE::ViewportClearMode p_clear_mode) = 0;
 
+	// Render-thread callback after viewport resolve, before dependent viewports.
+	virtual void viewport_set_pre_draw_callback(RID p_viewport, const Callable &p_callback) = 0;
+	virtual void viewport_set_post_draw_callback(RID p_viewport, const Callable &p_callback) = 0;
 	virtual RID viewport_get_render_target(RID p_viewport) const = 0;
 	virtual RID viewport_get_texture(RID p_viewport) const = 0;
 
@@ -648,6 +655,8 @@ public:
 	virtual void sky_set_mode(RID p_sky, RSE::SkyMode p_mode) = 0;
 	virtual void sky_set_material(RID p_sky, RID p_material) = 0;
 	virtual Ref<Image> sky_bake_panorama(RID p_sky, float p_energy, bool p_bake_irradiance, const Size2i &p_size) = 0;
+	// Borrow the active cosine-convolved RD array for renderer inspection.
+	virtual RID sky_get_cosine_cone_texture_rd(RID p_sky) = 0;
 
 	/* COMPOSITOR EFFECTS API */
 
@@ -738,6 +747,9 @@ public:
 
 	virtual RID scenario_create() = 0;
 
+	// Set world-space receiver heights for stable single-map orthographic shadows; equal bounds disable fitting.
+	virtual void scenario_set_shadow_receiver_height_range(RID p_scenario, const Vector2 &p_range) = 0;
+	virtual void scenario_set_shadow_caster_query(RID p_scenario, bool p_camera_query, float p_padding) = 0;
 	virtual void scenario_set_environment(RID p_scenario, RID p_environment) = 0;
 	virtual void scenario_set_fallback_environment(RID p_scenario, RID p_environment) = 0;
 	virtual void scenario_set_camera_attributes(RID p_scenario, RID p_camera_attributes) = 0;
@@ -769,6 +781,9 @@ public:
 	virtual void instance_set_visibility_parent(RID p_instance, RID p_parent_instance) = 0;
 
 	virtual void instance_set_ignore_culling(RID p_instance, bool p_enabled) = 0;
+	// Diagnostic label only; never changes ordering, visibility, materials, or batching.
+	virtual void instance_set_profile_label(RID p_instance, const StringName &p_label) = 0;
+	virtual void instance_set_gpu_placement_culling(RID p_instance, RID p_positions, RID p_visible_multimesh, const Vector4 &p_origin_tile_height, float p_radius, float p_center_height) = 0;
 
 	// Don't use these in a game!
 	virtual Vector<ObjectID> instances_cull_aabb(const AABB &p_aabb, RID p_scenario = RID()) const = 0;
@@ -838,6 +853,8 @@ public:
 	virtual void canvas_item_set_modulate(RID p_item, const Color &p_color) = 0;
 	virtual void canvas_item_set_self_modulate(RID p_item, const Color &p_color) = 0;
 	virtual void canvas_item_set_visibility_layer(RID p_item, uint32_t p_visibility_layer) = 0;
+	// Diagnostic label for existing canvas batches; an empty label opts out of classification.
+	virtual void canvas_item_set_profile_label(RID p_item, const StringName &p_label) = 0;
 
 	virtual void canvas_item_set_draw_behind_parent(RID p_item, bool p_enable) = 0;
 	virtual void canvas_item_set_use_identity_transform(RID p_item, bool p_enabled) = 0;
@@ -1006,6 +1023,8 @@ public:
 	virtual void set_frame_profiling_enabled(bool p_enable) = 0;
 	virtual Vector<RenderingServerTypes::FrameProfileArea> get_frame_profile() = 0;
 	virtual uint64_t get_frame_profile_frame() = 0;
+	// Enables bounded in-pass draw profiling; disabled by default on every backend.
+	virtual void set_pipeline_profiling_enabled(bool p_enabled) = 0;
 
 	virtual double get_frame_setup_time_cpu() const = 0;
 

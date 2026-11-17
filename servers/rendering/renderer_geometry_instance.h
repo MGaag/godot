@@ -33,12 +33,26 @@
 #include "core/math/color.h"
 #include "core/math/rect2.h"
 #include "core/math/transform_3d.h"
+#include "core/math/vector4.h"
 #include "core/templates/rid.h"
 #include "servers/rendering/storage/utilities.h"
+
+// Defines backend geometry views; diagnostic labels are derived from RendererSceneCull instances and never alter geometry or shader state.
 
 // API definition for our RenderGeometryInstance class so we can expose this through GDExtension in the near future
 class RenderGeometryInstance {
 public:
+	StringName profile_label; // Derived diagnostic view of the scene instance's canonical label.
+	// Placement-only records use identity transforms, white color and custom.z cell IDs.
+	// The scene owns roots and draw commands; the backend owns transient compact IDs.
+	struct GPUPlacementCulling {
+		RID positions;
+		RID visible_multimesh;
+		Vector4 origin_tile_height;
+		float radius = 0.0f;
+		float center_height = 0.0f;
+	};
+	GPUPlacementCulling gpu_placement_culling;
 	virtual ~RenderGeometryInstance() {}
 
 	virtual void _mark_dirty() = 0;

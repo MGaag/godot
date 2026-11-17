@@ -137,6 +137,9 @@ public:
 	virtual int multimesh_get_instance_count(RID p_multimesh) const;
 
 	virtual void multimesh_set_mesh(RID p_multimesh, RID p_mesh);
+	virtual void multimesh_set_mesh_lod(RID p_multimesh, int p_lod) {
+		ERR_FAIL_COND_MSG(p_lod != 0, "Fixed indirect LOD selection requires the RenderingDevice backend.");
+	}
 	virtual void multimesh_instance_set_transform(RID p_multimesh, int p_index, const Transform3D &p_transform);
 	virtual void multimesh_instance_set_transform_2d(RID p_multimesh, int p_index, const Transform2D &p_transform);
 	virtual void multimesh_instance_set_color(RID p_multimesh, int p_index, const Color &p_color);

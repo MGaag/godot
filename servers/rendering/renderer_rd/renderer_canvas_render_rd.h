@@ -41,6 +41,8 @@
 #include "servers/rendering/rendering_server_types.h"
 #include "servers/rendering/shader_compiler.h"
 
+// Records and draws canvas batches; optional contiguous-owner GPU scopes preserve production batching and report mixed batches explicitly. RenderingDevice owns asynchronous queries.
+
 class RendererCanvasRenderRD : public RendererCanvasRender {
 	enum {
 		BASE_UNIFORM_SET = 0,
@@ -514,6 +516,8 @@ class RendererCanvasRenderRD : public RendererCanvasRender {
 	static constexpr uint32_t INSTANCE_COUNT_MASK = 0x7fff'ffff;
 
 	struct Batch {
+		StringName profile_label; // Existing batch ownership; mixed labels never force a batch split.
+		bool profile_label_assigned = false; // Empty labels still count as real batch contributors.
 		/// First instance index into the instance buffer for this batch.
 		uint32_t start = 0;
 		/// Number of instances in this batch.

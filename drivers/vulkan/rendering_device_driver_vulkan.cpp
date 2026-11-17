@@ -809,7 +809,6 @@ Error RenderingDeviceDriverVulkan::_check_device_features() {
 	// The excluded features are:
 	// - robustBufferAccess (can hamper performance on some hardware)
 	// - occlusionQueryPrecise
-	// - pipelineStatisticsQuery
 	// - shaderStorageImageMultisample (unsupported by Intel Arc, prevents from using MSAA storage accidentally)
 	// - shaderResourceResidency
 	// - sparseBinding (we don't use sparse features and enabling them cause extra internal allocations inside the Vulkan driver we don't need)
@@ -839,6 +838,8 @@ Error RenderingDeviceDriverVulkan::_check_device_features() {
 	VK_DEVICEFEATURE_ENABLE_IF(dualSrcBlend);
 	VK_DEVICEFEATURE_ENABLE_IF(logicOp);
 	VK_DEVICEFEATURE_ENABLE_IF(multiDrawIndirect);
+	// Optional diagnostic counters never replace rendering on unsupported devices.
+	VK_DEVICEFEATURE_ENABLE_IF(pipelineStatisticsQuery);
 	VK_DEVICEFEATURE_ENABLE_IF(drawIndirectFirstInstance);
 	VK_DEVICEFEATURE_ENABLE_IF(depthClamp);
 	VK_DEVICEFEATURE_ENABLE_IF(depthBiasClamp);
@@ -5952,7 +5953,8 @@ RDD::PipelineID RenderingDeviceDriverVulkan::render_pipeline_create(
 		multisample_state_create_info.pSampleMask = nullptr;
 	}
 	multisample_state_create_info.alphaToCoverageEnable = p_multisample_state.enable_alpha_to_coverage;
-	multisample_state_create_info.alphaToOneEnable = p_multisample_state.enable_alpha_to_one;
+	// Alpha-to-one is optional in Vulkan and must only be requested when enabled.
+	multisample_state_create_info.alphaToOneEnable = p_multisample_state.enable_alpha_to_one && requested_device_features.alphaToOne;
 
 	// Depth stencil.
 
@@ -6749,6 +6751,34 @@ RDD::PipelineID RenderingDeviceDriverVulkan::compute_pipeline_create(ShaderID p_
 /*****************/
 
 // ----- TIMESTAMP -----
+
+// Create one scalar input-assembly counter per contiguous triangle draw scope.
+RDD::QueryPoolID RenderingDeviceDriverVulkan::primitive_query_pool_create(uint32_t p_query_count) {
+	if (!requested_device_features.pipelineStatisticsQuery) {
+		return QueryPoolID();
+	}
+	VkQueryPoolCreateInfo info = {};
+	info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+	info.queryType = VK_QUERY_TYPE_PIPELINE_STATISTICS;
+	info.queryCount = p_query_count;
+	info.pipelineStatistics = VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_PRIMITIVES_BIT;
+	VkQueryPool pool = VK_NULL_HANDLE;
+	VkResult result = vkCreateQueryPool(vk_device, &info, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_QUERY_POOL), &pool);
+	ERR_FAIL_COND_V(result != VK_SUCCESS, QueryPoolID());
+	return QueryPoolID(pool);
+}
+
+// Counter commands stay inside their existing draw stream, including indirect draws.
+void RenderingDeviceDriverVulkan::command_primitive_query_begin(CommandBufferID p_cmd_buffer, QueryPoolID p_pool_id, uint32_t p_index) {
+	const CommandBufferInfo *command_buffer = (const CommandBufferInfo *)p_cmd_buffer.id;
+	vkCmdBeginQuery(command_buffer->vk_command_buffer, (VkQueryPool)p_pool_id.id, p_index, 0);
+}
+
+// Close the same scalar counter without changing pass lifetime or synchronization.
+void RenderingDeviceDriverVulkan::command_primitive_query_end(CommandBufferID p_cmd_buffer, QueryPoolID p_pool_id, uint32_t p_index) {
+	const CommandBufferInfo *command_buffer = (const CommandBufferInfo *)p_cmd_buffer.id;
+	vkCmdEndQuery(command_buffer->vk_command_buffer, (VkQueryPool)p_pool_id.id, p_index);
+}
 
 RDD::QueryPoolID RenderingDeviceDriverVulkan::timestamp_query_pool_create(uint32_t p_query_count) {
 	VkQueryPoolCreateInfo query_pool_create_info = {};

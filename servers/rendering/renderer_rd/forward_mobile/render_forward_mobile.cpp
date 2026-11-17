@@ -30,6 +30,8 @@
 
 #include "render_forward_mobile.h"
 
+#include "main/frame_cpu_profile.h"
+
 #include "core/config/project_settings.h"
 #include "servers/rendering/renderer_rd/framebuffer_cache_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/light_storage.h"
@@ -44,6 +46,8 @@
 #ifndef XR_DISABLED
 #include "servers/xr/xr_interface.h"
 #include "servers/xr/xr_server.h"
+
+// Owns Mobile scene rendering; optional color-draw ownership scopes preserve sorting, materials and draw counts. SceneCull supplies labels and RenderingDevice records in-pass queries.
 #endif
 
 #define PRELOAD_PIPELINES_ON_SURFACE_CACHE_CONSTRUCTION 1
@@ -740,6 +744,23 @@ RID RenderForwardMobile::_setup_render_pass_uniform_set(RenderListType p_render_
 		uniforms.push_back(u);
 	}
 
+	// Cone levels contain normalized cosine integrals at explicit apertures,
+	// separate from specular GGX roughness and ordinary spatial downsampling.
+	{
+		RID cone_texture;
+		if (p_render_data && p_render_data->environment.is_valid()) {
+			RID sky_rid = environment_get_sky(p_render_data->environment);
+			if (sky_rid.is_valid()) {
+				cone_texture = sky.sky_get_cosine_cone_texture_rd(sky_rid);
+			}
+		}
+		if (cone_texture.is_null()) {
+			cone_texture = texture_storage->texture_rd_get_default(RendererRD::TextureStorage::DEFAULT_RD_TEXTURE_2D_ARRAY_BLACK);
+		}
+		RD::Uniform u(RD::UNIFORM_TYPE_TEXTURE, 29, cone_texture);
+		uniforms.push_back(u);
+	}
+
 	return UniformSetCacheRD::get_singleton()->get_cache_vec(scene_shader.get_default_shader_rd(is_multiview), RENDER_PASS_UNIFORM_SET, uniforms);
 }
 
@@ -810,7 +831,7 @@ void RenderForwardMobile::_pre_opaque_render(RenderDataRD *p_render_data) {
 
 		//cube shadows are rendered in their own way
 		for (const int &index : p_render_data->cube_shadows) {
-			_render_shadow_pass(p_render_data->render_shadows[index].light, p_render_data->shadow_atlas, p_render_data->render_shadows[index].pass, p_render_data->render_shadows[index].instances, lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, true, true, true, p_render_data->render_info, p_render_data->scene_data->cam_transform);
+			_render_shadow_pass(p_render_data->render_shadows[index].light, p_render_data->shadow_atlas, p_render_data->render_shadows[index].pass, p_render_data->render_shadows[index].instances, lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, true, true, true, p_render_data->render_info, p_render_data->scene_data->cam_transform, p_render_data->render_shadows[index].caster_query_planes);
 		}
 
 		if (p_render_data->directional_shadows.size()) {
@@ -831,11 +852,11 @@ void RenderForwardMobile::_pre_opaque_render(RenderDataRD *p_render_data) {
 
 		//render directional shadows
 		for (uint32_t i = 0; i < p_render_data->directional_shadows.size(); i++) {
-			_render_shadow_pass(p_render_data->render_shadows[p_render_data->directional_shadows[i]].light, p_render_data->shadow_atlas, p_render_data->render_shadows[p_render_data->directional_shadows[i]].pass, p_render_data->render_shadows[p_render_data->directional_shadows[i]].instances, lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, false, i == p_render_data->directional_shadows.size() - 1, false, p_render_data->render_info, p_render_data->scene_data->cam_transform);
+			_render_shadow_pass(p_render_data->render_shadows[p_render_data->directional_shadows[i]].light, p_render_data->shadow_atlas, p_render_data->render_shadows[p_render_data->directional_shadows[i]].pass, p_render_data->render_shadows[p_render_data->directional_shadows[i]].instances, lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, false, i == p_render_data->directional_shadows.size() - 1, false, p_render_data->render_info, p_render_data->scene_data->cam_transform, p_render_data->render_shadows[p_render_data->directional_shadows[i]].caster_query_planes);
 		}
 		//render positional shadows
 		for (uint32_t i = 0; i < p_render_data->shadows.size(); i++) {
-			_render_shadow_pass(p_render_data->render_shadows[p_render_data->shadows[i]].light, p_render_data->shadow_atlas, p_render_data->render_shadows[p_render_data->shadows[i]].pass, p_render_data->render_shadows[p_render_data->shadows[i]].instances, lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, i == 0, i == p_render_data->shadows.size() - 1, true, p_render_data->render_info, p_render_data->scene_data->cam_transform);
+			_render_shadow_pass(p_render_data->render_shadows[p_render_data->shadows[i]].light, p_render_data->shadow_atlas, p_render_data->render_shadows[p_render_data->shadows[i]].pass, p_render_data->render_shadows[p_render_data->shadows[i]].instances, lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, i == 0, i == p_render_data->shadows.size() - 1, true, p_render_data->render_info, p_render_data->scene_data->cam_transform, p_render_data->render_shadows[p_render_data->shadows[i]].caster_query_planes);
 		}
 
 		_render_shadow_process();
@@ -845,6 +866,7 @@ void RenderForwardMobile::_pre_opaque_render(RenderDataRD *p_render_data) {
 }
 
 void RenderForwardMobile::_render_scene(RenderDataRD *p_render_data, const Color &p_default_bg_color) {
+	FrameCPUProfile::Scope cpu_phase("Mobile render setup");
 	RendererRD::LightStorage *light_storage = RendererRD::LightStorage::get_singleton();
 	RendererRD::TextureStorage *texture_storage = RendererRD::TextureStorage::get_singleton();
 
@@ -1176,6 +1198,16 @@ void RenderForwardMobile::_render_scene(RenderDataRD *p_render_data, const Color
 
 	_pre_opaque_render(p_render_data);
 
+	// Camera visibility follows shadows but is a distinct GPU cost.
+	RENDER_TIMESTAMP("Cull GPU instances");
+	gpu_placement_prepared.clear();
+	const bool use_gpu_placement_culling = p_render_data->scene_data->view_count == 1;
+	if (use_gpu_placement_culling) {
+		const Vector<Plane> planes = p_render_data->scene_data->cam_projection.get_projection_planes(p_render_data->scene_data->cam_transform);
+		_prepare_gpu_placement_culling(render_list[RENDER_LIST_OPAQUE].elements.ptr(), render_list[RENDER_LIST_OPAQUE].elements.size(), planes);
+		_prepare_gpu_placement_culling(render_list[RENDER_LIST_ALPHA].elements.ptr(), render_list[RENDER_LIST_ALPHA].elements.size(), planes, 1);
+	}
+
 	SceneShaderForwardMobile::ShaderSpecialization base_specialization = scene_shader.default_specialization;
 
 	{
@@ -1287,6 +1319,7 @@ void RenderForwardMobile::_render_scene(RenderDataRD *p_render_data, const Color
 
 		if (render_list[RENDER_LIST_OPAQUE].elements.size() > 0) {
 			RenderListParameters render_list_params(render_list[RENDER_LIST_OPAQUE].elements.ptr(), render_list[RENDER_LIST_OPAQUE].element_info.ptr(), render_list[RENDER_LIST_OPAQUE].elements.size(), reverse_cull, PASS_MODE_COLOR, rp_uniform_set, base_specialization, get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_WIREFRAME, Vector2(), p_render_data->scene_data->lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, p_render_data->scene_data->view_count);
+			render_list_params.gpu_placement_culling = use_gpu_placement_culling;
 			render_list_params.framebuffer_format = fb_format;
 			render_list_params.subpass = RD::get_singleton()->draw_list_get_current_pass(); // Should now always be 0.
 
@@ -1320,7 +1353,8 @@ void RenderForwardMobile::_render_scene(RenderDataRD *p_render_data, const Color
 				rp_uniform_set = _setup_render_pass_uniform_set(RENDER_LIST_ALPHA, p_render_data, is_multiview, radiance_texture, samplers, true);
 
 				RenderListParameters render_list_params(render_list[RENDER_LIST_ALPHA].elements.ptr(), render_list[RENDER_LIST_ALPHA].element_info.ptr(), render_list[RENDER_LIST_ALPHA].elements.size(), reverse_cull, PASS_MODE_COLOR_TRANSPARENT, rp_uniform_set, base_specialization, get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_WIREFRAME, Vector2(), p_render_data->scene_data->lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, p_render_data->scene_data->view_count);
-				render_list_params.framebuffer_format = fb_format;
+				render_list_params.gpu_placement_culling = use_gpu_placement_culling;
+			render_list_params.framebuffer_format = fb_format;
 				render_list_params.subpass = RD::get_singleton()->draw_list_get_current_pass(); // Should now always be 0.
 
 				_render_list(draw_list, fb_format, &render_list_params, 0, render_list_params.element_count);
@@ -1389,7 +1423,8 @@ void RenderForwardMobile::_render_scene(RenderDataRD *p_render_data, const Color
 				//_setup_environment(p_render_data, is_reflection_probe, screen_size, screen_size, p_default_bg_color, false);
 
 				RenderListParameters render_list_params(render_list[RENDER_LIST_ALPHA].elements.ptr(), render_list[RENDER_LIST_ALPHA].element_info.ptr(), render_list[RENDER_LIST_ALPHA].elements.size(), reverse_cull, PASS_MODE_COLOR, rp_uniform_set, base_specialization, get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_WIREFRAME, Vector2(), p_render_data->scene_data->lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, p_render_data->scene_data->view_count);
-				render_list_params.framebuffer_format = fb_format;
+				render_list_params.gpu_placement_culling = use_gpu_placement_culling;
+			render_list_params.framebuffer_format = fb_format;
 				render_list_params.subpass = RD::get_singleton()->draw_list_get_current_pass(); // Should now always be 0.
 
 				draw_list = RD::get_singleton()->draw_list_begin(framebuffer, RD::DRAW_DEFAULT_ALL, Vector<Color>(), 1.0f, 0, p_render_data->render_region, breadcrumb);
@@ -1454,7 +1489,7 @@ void RenderForwardMobile::_render_ssdm_pass(RenderDataRD *p_render_data) {
 
 /* these are being called from RendererSceneRenderRD::_pre_opaque_render */
 
-void RenderForwardMobile::_render_shadow_pass(RID p_light, RID p_shadow_atlas, int p_pass, const PagedArray<RenderGeometryInstance *> &p_instances, float p_lod_distance_multiplier, float p_screen_mesh_lod_threshold, bool p_open_pass, bool p_close_pass, bool p_clear_region, RenderingServerTypes::RenderInfo *p_render_info, const Transform3D &p_main_cam_transform) {
+void RenderForwardMobile::_render_shadow_pass(RID p_light, RID p_shadow_atlas, int p_pass, const PagedArray<RenderGeometryInstance *> &p_instances, float p_lod_distance_multiplier, float p_screen_mesh_lod_threshold, bool p_open_pass, bool p_close_pass, bool p_clear_region, RenderingServerTypes::RenderInfo *p_render_info, const Transform3D &p_main_cam_transform, const Vector<Plane> &p_caster_query) {
 	RendererRD::LightStorage *light_storage = RendererRD::LightStorage::get_singleton();
 
 	ERR_FAIL_COND(!light_storage->owns_light_instance(p_light));
@@ -1618,7 +1653,7 @@ void RenderForwardMobile::_render_shadow_pass(RID p_light, RID p_shadow_atlas, i
 
 	if (render_cubemap) {
 		//rendering to cubemap
-		_render_shadow_append(render_fb, p_instances, light_projection, light_transform, zfar, 0, 0, false, false, use_pancake, p_lod_distance_multiplier, p_screen_mesh_lod_threshold, Rect2(), false, true, true, true, p_render_info, p_main_cam_transform);
+		_render_shadow_append(render_fb, p_instances, light_projection, light_transform, zfar, 0, 0, false, false, use_pancake, p_lod_distance_multiplier, p_screen_mesh_lod_threshold, Rect2(), false, true, true, true, p_render_info, p_main_cam_transform, p_caster_query);
 		if (finalize_cubemap) {
 			_render_shadow_process();
 			_render_shadow_end();
@@ -1637,7 +1672,7 @@ void RenderForwardMobile::_render_shadow_pass(RID p_light, RID p_shadow_atlas, i
 
 	} else {
 		//render shadow
-		_render_shadow_append(render_fb, p_instances, light_projection, light_transform, zfar, 0, 0, using_dual_paraboloid, using_dual_paraboloid_flip, use_pancake, p_lod_distance_multiplier, p_screen_mesh_lod_threshold, atlas_rect, flip_y, p_clear_region, p_open_pass, p_close_pass, p_render_info, p_main_cam_transform);
+		_render_shadow_append(render_fb, p_instances, light_projection, light_transform, zfar, 0, 0, using_dual_paraboloid, using_dual_paraboloid_flip, use_pancake, p_lod_distance_multiplier, p_screen_mesh_lod_threshold, atlas_rect, flip_y, p_clear_region, p_open_pass, p_close_pass, p_render_info, p_main_cam_transform, p_caster_query);
 	}
 }
 
@@ -1649,7 +1684,7 @@ void RenderForwardMobile::_render_shadow_begin() {
 	render_list[RENDER_LIST_SECONDARY].clear();
 }
 
-void RenderForwardMobile::_render_shadow_append(RID p_framebuffer, const PagedArray<RenderGeometryInstance *> &p_instances, const Projection &p_projection, const Transform3D &p_transform, float p_zfar, float p_bias, float p_normal_bias, bool p_use_dp, bool p_use_dp_flip, bool p_use_pancake, float p_lod_distance_multiplier, float p_screen_mesh_lod_threshold, const Rect2i &p_rect, bool p_flip_y, bool p_clear_region, bool p_begin, bool p_end, RenderingServerTypes::RenderInfo *p_render_info, const Transform3D &p_main_cam_transform) {
+void RenderForwardMobile::_render_shadow_append(RID p_framebuffer, const PagedArray<RenderGeometryInstance *> &p_instances, const Projection &p_projection, const Transform3D &p_transform, float p_zfar, float p_bias, float p_normal_bias, bool p_use_dp, bool p_use_dp_flip, bool p_use_pancake, float p_lod_distance_multiplier, float p_screen_mesh_lod_threshold, const Rect2i &p_rect, bool p_flip_y, bool p_clear_region, bool p_begin, bool p_end, RenderingServerTypes::RenderInfo *p_render_info, const Transform3D &p_main_cam_transform, const Vector<Plane> &p_caster_query) {
 	SceneState::ShadowPass shadow_pass;
 
 	if (p_render_info) {
@@ -1704,6 +1739,16 @@ void RenderForwardMobile::_render_shadow_append(RID p_framebuffer, const PagedAr
 			flip_cull = !flip_cull;
 		}
 
+		if (!p_use_dp) {
+			// Drop both depth planes: directional pancake shadows can originate
+			// upstream, and this remains conservative for all other lights.
+			shadow_pass.gpu_culling_planes = p_projection.get_projection_planes(p_transform);
+			shadow_pass.gpu_culling_planes.remove_at(1);
+			shadow_pass.gpu_culling_planes.remove_at(0);
+			if (!p_caster_query.is_empty()) {
+				shadow_pass.gpu_culling_planes = p_caster_query;
+			}
+		}
 		shadow_pass.element_from = render_list_from;
 		shadow_pass.element_count = render_list_size;
 		shadow_pass.flip_cull = flip_cull;
@@ -1738,11 +1783,145 @@ void RenderForwardMobile::_render_shadow_process() {
 	RD::get_singleton()->draw_command_end_label();
 }
 
+// Writes a separate visible stream before its corresponding draw list.
+void RenderForwardMobile::_prepare_gpu_placement_culling(GeometryInstanceSurfaceDataCache **p_elements, uint32_t p_count, const Vector<Plane> &p_planes, uint32_t p_view) {
+	FrameCPUProfile::Scope cpu_phase("GPU culling preparation");
+	RendererRD::MeshStorage *meshes = RendererRD::MeshStorage::get_singleton();
+	RendererRD::TextureStorage *textures = RendererRD::TextureStorage::get_singleton();
+	RD *rd = RD::get_singleton();
+
+	// Normalize once per view instead of taking a square root for every instance.
+	Vector<Plane> normalized_planes = p_planes;
+	for (int i = 0; i < normalized_planes.size(); i++) {
+		if (normalized_planes[i].normal.length_squared() < CMP_EPSILON * CMP_EPSILON || !normalized_planes[i].is_finite()) {
+			return;
+		}
+		normalized_planes.write[i].normalize();
+	}
+
+	gpu_placement_jobs.clear();
+	for (uint32_t i = 0; i < p_count; i++) {
+		GeometryInstanceForwardMobile *instance = p_elements[i]->owner;
+		const RenderGeometryInstance::GPUPlacementCulling &config = instance->gpu_placement_culling;
+		if (!config.positions.is_valid() || !config.visible_multimesh.is_valid() || gpu_placement_prepared.has(config.visible_multimesh)) {
+			continue;
+		}
+		// The caller already supplies conservative geometry bounds for scene
+		// culling. Expand them for the registered animated instance spheres.
+		// Fully contained batches can draw their original stream directly.
+		const AABB batch_bound = instance->transformed_aabb.grow(config.radius + Math::abs(config.center_height));
+		const Vector3 batch_center = batch_bound.get_center();
+		const Vector3 batch_extents = batch_bound.size * 0.5f;
+		bool contained = true;
+		for (const Plane &plane : normalized_planes) {
+			if (plane.distance_to(batch_center) + plane.normal.abs().dot(batch_extents) > -0.001f) {
+				contained = false;
+				break;
+			}
+		}
+		if (contained) {
+			continue;
+		}
+		const RID source = instance->data->base;
+		if (source == config.visible_multimesh) {
+			continue;
+		}
+
+		// Only the standard indirect 3D record with color and custom data has
+		// the placement identity at the registered custom-data offset.
+		if (!(instance->base_flags & INSTANCE_DATA_FLAG_MULTIMESH_INDIRECT) || !meshes->owns_multimesh(source) || !meshes->owns_multimesh(config.visible_multimesh)) {
+			continue;
+		}
+		if (meshes->multimesh_get_transform_format(source) != RSE::MULTIMESH_TRANSFORM_3D || !meshes->multimesh_uses_colors(source) || !meshes->multimesh_uses_custom_data(source)) {
+			continue;
+		}
+		if (meshes->mesh_get_surface_count(meshes->_multimesh_get_mesh(source)) != 1) {
+			continue; // Keep unsupported multi-surface meshes on the original draw path.
+		}
+		if (meshes->multimesh_get_transform_format(config.visible_multimesh) != RSE::MULTIMESH_TRANSFORM_3D || !meshes->multimesh_uses_indirect(config.visible_multimesh) || !meshes->multimesh_uses_colors(config.visible_multimesh) || !meshes->multimesh_uses_custom_data(config.visible_multimesh)) {
+			continue;
+		}
+		const int count = meshes->_multimesh_get_instance_count(source);
+		if (count <= 0 || meshes->_multimesh_get_mesh(source) != meshes->_multimesh_get_mesh(config.visible_multimesh)) {
+			continue;
+		}
+		const RID positions = textures->texture_get_rd_texture(config.positions);
+		if (!positions.is_valid()) {
+			continue;
+		}
+		const RD::TextureFormat format = rd->texture_get_format(positions);
+		if (format.width == 0 || format.width != format.height || uint64_t(format.width) * format.height != uint64_t(count)) {
+			continue;
+		}
+
+		// Source placement remains authoritative; the output is a transient
+		// per-pass draw view, reused only after its previous draw has finished.
+		if (gpu_placement_visibility == nullptr) {
+			gpu_placement_visibility = memnew(RendererRD::InstanceVisibility);
+		}
+		RendererRD::InstanceVisibility::Sources sources;
+		sources.positions = positions;
+		sources.instances = meshes->_multimesh_get_buffer_rd_rid(source);
+		sources.command = meshes->_multimesh_get_command_buffer_rd_rid(source);
+		// Compact storage is owned lazily by this geometry binding cache.
+		sources.visible_command = meshes->_multimesh_get_command_buffer_rd_rid(config.visible_multimesh);
+		if (!sources.instances.is_valid() || !sources.command.is_valid() || !sources.visible_command.is_valid()) {
+			continue;
+		}
+		sources.origin_tile_height = config.origin_tile_height;
+		sources.radius = config.radius;
+		sources.center_height = config.center_height;
+		sources.max_instances = count;
+		uint32_t current_offset = 0;
+		uint32_t previous_offset = 0;
+		meshes->_multimesh_get_motion_vectors_offsets(source, current_offset, previous_offset);
+		if (current_offset != 0 && current_offset != uint32_t(count)) {
+			continue;
+		}
+		sources.second_source_bank = current_offset != 0;
+		sources.source_width = format.width;
+		sources.stride_words = 20;
+		sources.cell_index_word = 18;
+		RendererRD::InstanceVisibility::Job job;
+		if (gpu_placement_visibility->prepare(sources, normalized_planes, instance->gpu_placement_bindings, job)) {
+			if (!rd->uniform_set_is_valid(instance->gpu_placement_bindings.draw_set)) {
+				RD::Uniform ids;
+				ids.uniform_type = RD::UNIFORM_TYPE_STORAGE_BUFFER;
+				ids.binding = 0;
+				ids.append_id(instance->gpu_placement_bindings.compact_ids);
+				instance->gpu_placement_bindings.draw_set = UniformSetCacheRD::get_singleton()->get_cache(scene_shader.default_shader_rd, TRANSFORMS_UNIFORM_SET, ids);
+			}
+			if (!instance->gpu_placement_bindings.draw_set.is_valid()) {
+				continue;
+			}
+			gpu_placement_jobs.push_back(job);
+			gpu_placement_prepared.insert(config.visible_multimesh);
+		}
+	}
+
+	// Independent records share one compute list; the render graph orders its
+	// writes before the camera or cascade draw that consumes them.
+	if (!gpu_placement_jobs.is_empty()) {
+		if (!gpu_placement_visibility->dispatch(gpu_placement_jobs, p_view)) {
+			gpu_placement_prepared.clear();
+		}
+	}
+}
+
 void RenderForwardMobile::_render_shadow_end() {
 	RD::get_singleton()->draw_command_begin_label("Shadow Render");
 
+	uint32_t visibility_view = 2;
 	for (SceneState::ShadowPass &shadow_pass : scene_state.shadow_passes) {
+		gpu_placement_prepared.clear();
+		if (!shadow_pass.gpu_culling_planes.is_empty()) {
+			RENDER_TIMESTAMP("Shadow Culling begin");
+			_prepare_gpu_placement_culling(render_list[RENDER_LIST_SECONDARY].elements.ptr() + shadow_pass.element_from, shadow_pass.element_count, shadow_pass.gpu_culling_planes, visibility_view);
+			RENDER_TIMESTAMP("Shadow Culling end");
+		}
 		RenderListParameters render_list_parameters(render_list[RENDER_LIST_SECONDARY].elements.ptr() + shadow_pass.element_from, render_list[RENDER_LIST_SECONDARY].element_info.ptr() + shadow_pass.element_from, shadow_pass.element_count, shadow_pass.flip_cull, shadow_pass.pass_mode, shadow_pass.rp_uniform_set, scene_shader.default_specialization, false, Vector2(), shadow_pass.lod_distance_multiplier, shadow_pass.screen_mesh_lod_threshold, 1, shadow_pass.element_from);
+		visibility_view++;
+		render_list_parameters.gpu_placement_culling = !shadow_pass.gpu_culling_planes.is_empty();
 		_render_list_with_draw_list(&render_list_parameters, shadow_pass.framebuffer, shadow_pass.clear_depth ? RD::DRAW_CLEAR_DEPTH : RD::DRAW_DEFAULT_ALL, Vector<Color>(), 0.0f, 0, shadow_pass.rect);
 	}
 
@@ -2473,6 +2652,9 @@ void RenderForwardMobile::_render_list_with_draw_list(RenderListParameters *p_pa
 
 template <RenderForwardMobile::PassMode p_pass_mode>
 void RenderForwardMobile::_render_list_template(RenderingDevice::DrawListID p_draw_list, RenderingDevice::FramebufferFormatID p_framebuffer_Format, RenderListParameters *p_params, uint32_t p_from_element, uint32_t p_to_element) {
+	FrameCPUProfile::Scope cpu_draw((p_pass_mode == PASS_MODE_SHADOW || p_pass_mode == PASS_MODE_SHADOW_DP) ? "Shadow draw recording" : (p_pass_mode == PASS_MODE_COLOR_TRANSPARENT ? "Transparent draw recording" : "Opaque / other draw recording"));
+	const bool profiling = RSG::utilities->pipeline_profiling_active;
+	StringName profile_label; // Contiguous draw owner, independent of sorting and shader keys.
 	RendererRD::MeshStorage *mesh_storage = RendererRD::MeshStorage::get_singleton();
 	RendererRD::ParticlesStorage *particles_storage = RendererRD::ParticlesStorage::get_singleton();
 
@@ -2527,9 +2709,13 @@ void RenderForwardMobile::_render_list_template(RenderingDevice::DrawListID p_dr
 		}
 
 		if (shadow_pass) {
-			material_uniform_set = surf->material_uniform_set_shadow;
+			material_uniform_set = surf->material_shadow->uniform_set;
 			shader = surf->shader_shadow;
 			mesh_surface = surf->surface_shadow;
+			// Fixed indirect counts refer to the source surface, not a welded shadow mesh.
+			if ((inst->base_flags & INSTANCE_DATA_FLAG_MULTIMESH_INDIRECT) && mesh_storage->multimesh_surface_get_lod(inst->data->base, surf->surface) > 0) {
+				mesh_surface = surf->surface;
+			}
 
 		} else {
 			pipeline_specialization.use_light_projector = inst->use_projector;
@@ -2552,7 +2738,7 @@ void RenderForwardMobile::_render_list_template(RenderingDevice::DrawListID p_dr
 				shader = scene_shader.debug_shadow_splits_material_shader_ptr;
 			} else {
 #endif
-				material_uniform_set = surf->material_uniform_set;
+				material_uniform_set = surf->material->uniform_set;
 				shader = surf->shader;
 				surf->material->set_as_used();
 #ifdef DEBUG_ENABLED
@@ -2589,7 +2775,15 @@ void RenderForwardMobile::_render_list_template(RenderingDevice::DrawListID p_dr
 		}
 
 		pipeline_key.primitive_type = surf->primitive;
+		const RID source_multimesh = surf->owner->data->base;
+		const RID visible_multimesh = inst->gpu_placement_culling.visible_multimesh;
+		const bool use_gpu_placement = p_params->gpu_placement_culling && gpu_placement_prepared.has(visible_multimesh);
+		const RID draw_multimesh = use_gpu_placement ? visible_multimesh : source_multimesh;
 		RID xforms_uniform_set = surf->owner->transforms_uniform_set;
+		if (use_gpu_placement) {
+			xforms_uniform_set = inst->gpu_placement_bindings.draw_set;
+		}
+		push_constant.compact_placement_ids = use_gpu_placement ? 1 : 0;
 
 		switch (p_params->pass_mode) {
 			case PASS_MODE_COLOR:
@@ -2683,7 +2877,8 @@ void RenderForwardMobile::_render_list_template(RenderingDevice::DrawListID p_dr
 
 		if (pipeline_valid) {
 			if (!emulate_point_size) {
-				index_array_rd = mesh_storage->mesh_surface_get_index_array(mesh_surface, element_info.lod_index);
+				// Fixed indirect LOD selection owns both the index array and command count.
+				index_array_rd = mesh_storage->mesh_surface_get_index_array(mesh_surface, (surf->owner->base_flags & INSTANCE_DATA_FLAG_MULTIMESH_INDIRECT) ? mesh_storage->multimesh_surface_get_lod(source_multimesh, mesh_surface) : element_info.lod_index);
 			} else {
 				index_array_rd = RID();
 			}
@@ -2721,7 +2916,12 @@ void RenderForwardMobile::_render_list_template(RenderingDevice::DrawListID p_dr
 			if (surf->owner->base_flags & INSTANCE_DATA_FLAG_PARTICLES) {
 				particles_storage->particles_get_instance_buffer_motion_vectors_offsets(surf->owner->data->base, push_constant.multimesh_motion_vectors_current_offset, push_constant.multimesh_motion_vectors_previous_offset);
 			} else if (surf->owner->base_flags & INSTANCE_DATA_FLAG_MULTIMESH) {
-				mesh_storage->_multimesh_get_motion_vectors_offsets(surf->owner->data->base, push_constant.multimesh_motion_vectors_current_offset, push_constant.multimesh_motion_vectors_previous_offset);
+				if (use_gpu_placement) {
+					push_constant.multimesh_motion_vectors_current_offset = 0;
+					push_constant.multimesh_motion_vectors_previous_offset = 0;
+				} else {
+					mesh_storage->_multimesh_get_motion_vectors_offsets(surf->owner->data->base, push_constant.multimesh_motion_vectors_current_offset, push_constant.multimesh_motion_vectors_previous_offset);
+				}
 			} else {
 				push_constant.multimesh_motion_vectors_current_offset = 0;
 				push_constant.multimesh_motion_vectors_previous_offset = 0;
@@ -2740,6 +2940,22 @@ void RenderForwardMobile::_render_list_template(RenderingDevice::DrawListID p_dr
 			RD::get_singleton()->draw_list_set_push_constant(draw_list, &push_constant, push_constant_size);
 
 			uint32_t instance_count = surf->owner->instance_count > 1 ? surf->owner->instance_count : 1;
+			// Shadow draws use the same instance ownership without changing draw order.
+			if (profiling && (p_pass_mode == PASS_MODE_COLOR || p_pass_mode == PASS_MODE_COLOR_TRANSPARENT || shadow_pass)) {
+				StringName label = inst->profile_label;
+				if (shadow_pass && String(label).begins_with("Opaque ")) {
+					label = StringName("Shadow " + String(label).trim_prefix("Opaque "));
+				} else if (shadow_pass) {
+					label = StringName();
+				}
+				if (profile_label != label) {
+					RD::get_singleton()->draw_list_end_profile();
+					profile_label = label;
+					if (profile_label != StringName()) {
+						RD::get_singleton()->draw_list_begin_profile(profile_label);
+					}
+				}
+			}
 			if (surf->flags & GeometryInstanceSurfaceDataCache::FLAG_USES_PARTICLE_TRAILS) {
 				instance_count /= surf->owner->trail_steps;
 			}
@@ -2752,13 +2968,16 @@ void RenderForwardMobile::_render_list_template(RenderingDevice::DrawListID p_dr
 				}
 				RD::get_singleton()->draw_list_draw(draw_list, false, mesh_storage->mesh_surface_get_vertex_count(mesh_surface), instance_count * 6);
 			} else if (indirect) {
-				RD::get_singleton()->draw_list_draw_indirect(draw_list, index_array_rd.is_valid(), mesh_storage->_multimesh_get_command_buffer_rd_rid(surf->owner->data->base), surf->surface_index * sizeof(uint32_t) * mesh_storage->INDIRECT_MULTIMESH_COMMAND_STRIDE, 1, 0);
+				RD::get_singleton()->draw_list_draw_indirect(draw_list, index_array_rd.is_valid(), mesh_storage->_multimesh_get_command_buffer_rd_rid(draw_multimesh), surf->surface_index * sizeof(uint32_t) * mesh_storage->INDIRECT_MULTIMESH_COMMAND_STRIDE, 1, 0, surf->primitive == RSE::PRIMITIVE_TRIANGLES ? mesh_storage->mesh_surface_get_vertices_drawn_count(mesh_surface, mesh_storage->multimesh_surface_get_lod(source_multimesh, mesh_surface)) / 3 : 0);
 			} else {
 				RD::get_singleton()->draw_list_draw(draw_list, index_array_rd.is_valid(), instance_count);
 			}
 		}
 	}
 
+	if (profiling) {
+		RD::get_singleton()->draw_list_end_profile();
+	}
 	// Make the actual redraw request
 	if (should_request_redraw) {
 		RenderingServerDefault::redraw_request();
@@ -2831,6 +3050,9 @@ void RenderForwardMobile::geometry_instance_free(RenderGeometryInstance *p_geome
 		GeometryInstanceSurfaceDataCache *next = surf->next;
 		geometry_instance_surface_alloc.free(surf);
 		surf = next;
+	}
+	if (ginstance->gpu_placement_bindings.compact_ids.is_valid()) {
+		gpu_placement_visibility->release(ginstance->gpu_placement_bindings);
 	}
 	memdelete(ginstance->data);
 	geometry_instance_alloc.free(ginstance);
@@ -3017,7 +3239,6 @@ void RenderForwardMobile::_geometry_instance_add_surface_with_material(GeometryI
 
 	sdcache->shader = p_material->shader_data;
 	sdcache->material = p_material;
-	sdcache->material_uniform_set = p_material->uniform_set;
 	sdcache->surface = mesh_storage->mesh_get_surface(p_mesh, p_surface);
 	sdcache->primitive = mesh_storage->mesh_surface_get_primitive(sdcache->surface);
 	sdcache->surface_index = p_surface;
@@ -3028,7 +3249,7 @@ void RenderForwardMobile::_geometry_instance_add_surface_with_material(GeometryI
 
 	//shadow
 	sdcache->shader_shadow = material_shadow->shader_data;
-	sdcache->material_uniform_set_shadow = material_shadow->uniform_set;
+	sdcache->material_shadow = material_shadow;
 
 	sdcache->surface_shadow = surface_shadow ? surface_shadow : sdcache->surface;
 
@@ -3688,6 +3909,7 @@ RenderForwardMobile::RenderForwardMobile() {
 }
 
 RenderForwardMobile::~RenderForwardMobile() {
+	if (gpu_placement_visibility != nullptr) memdelete(gpu_placement_visibility);
 	RSG::light_storage->directional_shadow_atlas_set_size(0);
 
 	if (ltc.lut1_texture.is_valid()) {

@@ -42,6 +42,8 @@
 #include "servers/rendering/rendering_device_enums.h"
 #include "servers/rendering/rendering_server_enums.h"
 
+// Defines shared renderer utilities and capture-local pipeline profiling cadence. Detailed sampling does not change an existing external profiler session; backends own draw submission.
+
 class DependencyTracker;
 
 class Dependency {
@@ -130,6 +132,11 @@ private:
 };
 
 class RendererUtilities {
+protected:
+	// Backends may align diagnostic counters to their existing completed-frame ring.
+	virtual void _set_pipeline_draw_statistics_enabled(bool p_enabled) {}
+	virtual bool _pipeline_profile_frame_active() { return (pipeline_profile_frame++ % 4) == 0; }
+
 public:
 	virtual ~RendererUtilities() {}
 
@@ -157,16 +164,32 @@ public:
 	/* TIMING */
 
 	bool capturing_timestamps = false;
+	bool pipeline_profiling_enabled = false; // Opt-in detailed draw scopes; normal rendering does no query work.
+	bool pipeline_profiling_active = false; // One frame in four limits capture overhead while retaining a useful sample.
+	uint32_t pipeline_profile_frame = 0; // Capture-local cadence, reset when profiling is enabled.
+	// RenderingServer queues this mutation on the rendering thread.
+	void set_pipeline_profiling_enabled(bool p_enabled) {
+		pipeline_profiling_enabled = p_enabled;
+		pipeline_profiling_active = false;
+		pipeline_profile_frame = 0;
+		_set_pipeline_draw_statistics_enabled(p_enabled);
+	}
+	// Samples at frame boundaries; no renderer or caller needs its own cadence counter.
+	void begin_pipeline_profile_frame() {
+		pipeline_profiling_active = pipeline_profiling_enabled && _pipeline_profile_frame_active();
+	}
 
 #define TIMESTAMP_BEGIN() \
 	{ \
-		if (RSG::utilities->capturing_timestamps) \
+		if (RSG::utilities->capturing_timestamps || RSG::utilities->pipeline_profiling_active) \
 			RSG::utilities->capture_timestamps_begin(); \
+		if (RSG::utilities->pipeline_profiling_active) \
+			RSG::utilities->capture_timestamp("Pipeline profile sample"); \
 	}
 
 #define RENDER_TIMESTAMP(m_text) \
 	{ \
-		if (RSG::utilities->capturing_timestamps) \
+		if (RSG::utilities->capturing_timestamps || RSG::utilities->pipeline_profiling_active) \
 			RSG::utilities->capture_timestamp(m_text); \
 	}
 

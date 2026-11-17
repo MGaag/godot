@@ -269,6 +269,10 @@ void SkyRD::_render_sky(RD::DrawListID p_list, float p_time, RID p_fb, PipelineC
 
 void SkyRD::ReflectionData::clear_reflection_data() {
 	layers.clear();
+	if (cosine_cone_radiance.is_valid()) {
+		RD::get_singleton()->free_rid(cosine_cone_radiance);
+		cosine_cone_radiance = RID();
+	}
 	radiance_base_octmap = RID();
 	if (downsampled_radiance_octmap.is_valid()) {
 		RD::get_singleton()->free_rid(downsampled_radiance_octmap);
@@ -717,6 +721,7 @@ SkyRD::SkyRD() {
 	roughness_layers = GLOBAL_GET("rendering/reflections/sky_reflections/roughness_layers");
 	sky_ggx_samples_quality = GLOBAL_GET("rendering/reflections/sky_reflections/ggx_samples");
 	sky_use_octmap_array = GLOBAL_GET("rendering/reflections/sky_reflections/texture_array_reflections");
+	sky_cone_filter_enabled = GLOBAL_GET("rendering/reflections/sky_reflections/cosine_cone_filter");
 }
 
 void SkyRD::init() {
@@ -1383,6 +1388,15 @@ void SkyRD::update_radiance_buffers(Ref<RenderSceneBuffersRD> p_render_buffers, 
 			}
 			sky->processing_layer = 1;
 		}
+		// Angular cosine levels are updated once with the canonical sky source,
+		// independently of the specular GGX hierarchy. Every level retains normal
+		// resolution; an ordinary 1x1 spatial mip cannot represent a hemisphere.
+		if (sky_cone_filter_enabled) {
+			if (sky->reflection.cosine_cone_radiance.is_null()) {
+				sky->reflection.cosine_cone_radiance = sky_cone_filter.create_texture();
+			}
+			sky_cone_filter.update(sky->reflection.downsampled_radiance_octmap, sky->reflection.cosine_cone_radiance, sky->uv_border_size, sky_mode == RSE::SKY_MODE_REALTIME);
+		}
 		sky->baked_exposure = p_luminance_multiplier;
 		sky->reflection.dirty = false;
 
@@ -1709,6 +1723,13 @@ RID SkyRD::sky_get_radiance_texture_rd(RID p_sky) const {
 	ERR_FAIL_NULL_V(sky, RID());
 
 	return sky->radiance;
+}
+
+// Return the aperture-specific cosine integrals, never the box mip source.
+RID SkyRD::sky_get_cosine_cone_texture_rd(RID p_sky) const {
+	Sky *sky = get_sky(p_sky);
+	ERR_FAIL_NULL_V(sky, RID());
+	return sky->reflection.cosine_cone_radiance;
 }
 
 float SkyRD::sky_get_uv_border_size(RID p_sky) {

@@ -30,6 +30,8 @@
 
 #include "rendering_server_default.h"
 
+#include "main/frame_cpu_profile.h"
+
 #include "core/object/callable_mp.h"
 #include "core/os/os.h"
 #include "core/profiling/profiling.h"
@@ -41,6 +43,8 @@
 
 #ifndef XR_DISABLED
 #include "servers/xr/xr_server.h"
+
+// Dispatches rendering work and queued APIs; detailed pipeline profiling shares one frame cadence across backends. RendererUtilities owns its transient enablement.
 #endif
 
 // careful, these may run in different threads than the rendering server
@@ -74,9 +78,12 @@ void RenderingServerDefault::request_frame_drawn_callback(const Callable &p_call
 }
 
 void RenderingServerDefault::_draw(bool p_swap_buffers, double frame_step) {
+	FrameCPUProfile::Scope cpu_phase("Render preparation");
 	GodotProfileZoneGroupedFirst(_profile_zone, "rasterizer->begin_frame");
 	RSG::rasterizer->begin_frame(frame_step);
 
+	// Detailed markers share one bounded sampling cadence across all renderers.
+	RSG::utilities->begin_pipeline_profile_frame();
 	TIMESTAMP_BEGIN()
 
 	uint64_t time_usec = OS::get_singleton()->get_ticks_usec();
@@ -106,12 +113,14 @@ void RenderingServerDefault::_draw(bool p_swap_buffers, double frame_step) {
 	RSG::scene->render_probes();
 
 	GodotProfileZoneGrouped(_profile_zone, "viewport->draw_viewports");
+	cpu_phase.next("Viewport / render generation");
 	RSG::viewport->draw_viewports(p_swap_buffers);
 
 	GodotProfileZoneGrouped(_profile_zone, "canvas_render->update");
 	RSG::canvas_render->update();
 
 	GodotProfileZoneGrouped(_profile_zone, "rasterizer->end_frame");
+	cpu_phase.next("Render frame completion");
 	RSG::rasterizer->end_frame(p_swap_buffers);
 
 #ifndef XR_DISABLED
@@ -123,6 +132,7 @@ void RenderingServerDefault::_draw(bool p_swap_buffers, double frame_step) {
 #endif // XR_DISABLED
 
 	GodotProfileZoneGrouped(_profile_zone, "update_visibility_notifiers");
+	cpu_phase.next("Visibility notifications");
 	RSG::canvas->update_visibility_notifiers();
 	RSG::scene->update_visibility_notifiers();
 

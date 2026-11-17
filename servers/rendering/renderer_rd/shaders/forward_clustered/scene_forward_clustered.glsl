@@ -1248,6 +1248,7 @@ void fragment_shader(in SceneData scene_data) {
 
 	float ao = 1.0;
 	float bent_cone_aperture = 0.0;
+	float bent_cone_weight = 1.0;
 	float ao_light_affect = 0.0;
 
 	float alpha_highp = float(instances.data[instance_index].flags >> INSTANCE_FLAGS_FADE_SHIFT) / float(255.0);
@@ -1322,6 +1323,10 @@ void fragment_shader(in SceneData scene_data) {
 #ifdef LIGHT_VERTEX_USED
 	vec3 light_vertex = vertex;
 #endif //LIGHT_VERTEX_USED
+
+#ifdef DIRECTIONAL_SHADOW_FADE_USED
+	float directional_shadow_fade_distance = 0.0;
+#endif
 
 	mat3 model_normal_matrix;
 	if (bool(instances.data[instance_index].flags & INSTANCE_FLAGS_NON_UNIFORM_SCALE)) {

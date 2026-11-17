@@ -451,6 +451,9 @@
 		<constant name="TONE_MAPPER_AGX" value="4" enum="ToneMapper">
 			Uses an adjustable film-like tonemapping curve and desaturates bright values for a more realistic appearance. Better than other tonemappers at maintaining the hue of colors as they become brighter. The slowest tonemapping option.
 		</constant>
+		<constant name="TONE_MAPPER_GT7" value="5" enum="ToneMapper">
+			Uses the SDR GT7 transform through a cached 65-cubed HDR lookup. Bright colors roll toward white before display encoding. Available in Forward+ and Mobile. The lookup is baked once and uses approximately 2.1 MiB. HDR output is not supported. Mobile requires a float scene buffer to retain scene values above two; enable [member Viewport.use_hdr_2d] when that headroom is needed.
+		</constant>
 		<constant name="GLOW_BLEND_MODE_ADDITIVE" value="0" enum="GlowBlendMode">
 			Adds the glow effect to the scene.
 		</constant>

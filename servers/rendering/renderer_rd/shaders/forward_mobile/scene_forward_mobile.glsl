@@ -349,6 +349,13 @@ void vertex_shader(in vec3 vertex,
 #endif
 
 #else
+		// Placement-only streams encode identity transforms, white color and one
+		// stable cell ID. Reconstruct constants instead of copying full records.
+		if (draw_call.compact_placement_ids != 0u) {
+			matrix = mat4(1.0);
+			uint packed_cell = floatBitsToUint(transforms.data[INSTANCE_INDEX / 4u][INSTANCE_INDEX % 4u]);
+			instance_custom = vec4(0.0, 0.0, float(packed_cell), 1.0);
+		} else {
 		uint stride = multimesh_stride();
 		uint offset = stride * (INSTANCE_INDEX + multimesh_offset);
 
@@ -369,6 +376,7 @@ void vertex_shader(in vec3 vertex,
 
 		if (sc_multimesh_has_custom_data()) {
 			instance_custom = transforms.data[offset];
+		}
 		}
 
 #endif
@@ -1001,6 +1009,7 @@ layout(set = MATERIAL_UNIFORM_SET, binding = 0, std140) uniform MaterialUniforms
 #define scene_data scene_data_block.data
 
 #include "cell_light_probe_sampling_inc.glsl"
+#include "sky_ambient_cone_inc.glsl"
 
 /* clang-format on */
 
@@ -1042,7 +1051,26 @@ layout(location = 0) out vec4 frag_color;
 #define SPECULAR_SCHLICK_GGX
 #endif
 
+#ifdef USE_WIDE_DIRECTIONAL_SHADOW
+float wide_directional_shadow = 1.0;
+#endif
 #include "../scene_forward_lights_inc.glsl"
+#include "directional_depth_fade_inc.glsl"
+
+#ifdef USE_WIDE_DIRECTIONAL_SHADOW
+// Fixed atlas-space taps avoid screen-space or temporal rotation of the kernel.
+half sample_wide_directional_shadow(vec4 coord, vec4 atlas_rect, vec2 step_size) {
+	vec2 inset = scene_data.directional_shadow_pixel_size * 0.5;
+	float visibility = 0.0;
+	for (int y = -1; y <= 1; y++) {
+		for (int x = -1; x <= 1; x++) {
+			vec2 uv = clamp(coord.xy + vec2(x, y) * step_size, atlas_rect.xy + inset, atlas_rect.zw - inset);
+			visibility += texture(sampler2DShadow(directional_shadow_atlas, shadow_sampler), vec3(uv, coord.z));
+		}
+	}
+	return half(visibility / 9.0);
+}
+#endif
 
 #endif //!defined(MODE_RENDER_DEPTH) && !defined(MODE_UNSHADED) && !defined(USE_VERTEX_LIGHTING)
 
@@ -1175,6 +1203,7 @@ void main() {
 	float ao_light_affect_highp = 0.0;
 	// Cosine zero is a full unoccluded hemisphere; one is a zero-width cone.
 	float bent_cone_aperture_highp = 0.0;
+	float bent_cone_weight_highp = 1.0;
 
 	float alpha_highp = 1.0;
 
@@ -1248,6 +1277,10 @@ void main() {
 #ifdef LIGHT_VERTEX_USED
 	vec3 light_vertex = vertex;
 #endif //LIGHT_VERTEX_USED
+
+#ifdef DIRECTIONAL_SHADOW_FADE_USED
+	float directional_shadow_fade_distance = 0.0;
+#endif
 
 	mat3 model_normal_matrix;
 	if (bool(instances.data[draw_call.instance_index].flags & INSTANCE_FLAGS_NON_UNIFORM_SCALE)) {
@@ -1405,6 +1438,14 @@ void main() {
 #endif
 	alpha = compute_alpha_antialiasing_edge(alpha, alpha_texture_coordinate, alpha_antialiasing_edge);
 #endif // ALPHA_ANTIALIASING_EDGE_USED
+
+	// Match single-sample depth and color coverage without translucent blockers.
+	if (sc_alpha_to_coverage_cutout) {
+		if (alpha < half(0.5)) {
+			discard;
+		}
+		alpha = half(1.0);
+	}
 
 #ifdef MODE_RENDER_SSDM
 #if defined(USE_OPAQUE_PREPASS) || defined(ALPHA_ANTIALIASING_EDGE_USED)
@@ -1648,16 +1689,10 @@ void main() {
 		ambient_light = hvec3(scene_data.ambient_light_color_energy.rgb);
 
 		if (sc_scene_use_ambient_cubemap()) {
-			vec3 ambient_dir = scene_data.radiance_inverse_xform * indirect_normal;
-#ifdef USE_RADIANCE_OCTMAP_ARRAY
-			float ambient_lod = vec3_to_oct_lod(dFdx(ambient_dir), dFdy(ambient_dir), scene_data_block.data.radiance_pixel_size);
-			vec2 ambient_uv = vec3_to_oct_with_border(ambient_dir, vec2(scene_data_block.data.radiance_border_size, 1.0 - scene_data_block.data.radiance_border_size * 2.0));
-			hvec3 octmap_ambient = hvec3(textureLod(sampler2DArray(radiance_octmap, DEFAULT_SAMPLER_LINEAR_WITH_MIPMAPS_CLAMP), vec3(ambient_uv, MAX_ROUGHNESS_LOD), ambient_lod).rgb);
-#else
-			float roughness_lod = MAX_ROUGHNESS_LOD;
-			vec2 ambient_uv = vec3_to_oct_with_border(ambient_dir, vec2(scene_data_block.data.radiance_border_size, 1.0 - scene_data_block.data.radiance_border_size * 2.0));
-			hvec3 octmap_ambient = hvec3(textureLod(sampler2D(radiance_octmap, DEFAULT_SAMPLER_LINEAR_WITH_MIPMAPS_CLAMP), ambient_uv, roughness_lod).rgb);
-#endif //USE_RADIANCE_OCTMAP_ARRAY
+			vec3 ambient_dir = normalize(scene_data.radiance_inverse_xform * indirect_normal);
+			vec3 ambient_dir_ddx = dFdx(ambient_dir);
+			vec3 ambient_dir_ddy = dFdy(ambient_dir);
+			hvec3 octmap_ambient = mobile_ambient_sky(ambient_dir, ambient_dir_ddx, ambient_dir_ddy, bent_cone_aperture_highp, bent_cone_weight_highp);
 			octmap_ambient *= REFLECTION_MULTIPLIER;
 			octmap_ambient *= half(scene_data.IBL_exposure_normalization);
 			ambient_light = mix(ambient_light, octmap_ambient * half(scene_data.ambient_light_color_energy.a), half(scene_data.ambient_color_sky_mix));
@@ -1957,6 +1992,9 @@ void main() {
 #ifndef SHADOWS_DISABLED
 		// Do shadow and lighting in two passes to reduce register pressure
 		half shadows[8];
+#ifdef USE_WIDE_DIRECTIONAL_SHADOW
+		half wide_shadows[8];
+#endif
 
 		half shadowmask = half(1.0);
 
@@ -2047,10 +2085,23 @@ void main() {
 					}
 
 					pssm_coord /= pssm_coord.w;
+#if defined(USE_WIDE_DIRECTIONAL_SHADOW) || defined(DIRECTIONAL_SHADOW_FADE_USED)
+					int split = depth_z < directional_lights.data[i].shadow_split_offsets.x ? 0 :
+							depth_z < directional_lights.data[i].shadow_split_offsets.y ? 1 :
+							depth_z < directional_lights.data[i].shadow_split_offsets.z ? 2 : 3;
+#endif
+#ifdef USE_WIDE_DIRECTIONAL_SHADOW
+					vec2 wide_step = scene_data.directional_shadow_pixel_size * 4.0;
+					half wide_shadow = sample_wide_directional_shadow(pssm_coord, directional_lights.data[i].shadow_atlas_rects[split], wide_step);
+#endif
 
 					bool blend_split = sc_directional_light_blend_split(i);
 					float blend_split_weight = blend_split ? 1.0f : 0.0f;
+#ifdef DIRECTIONAL_SHADOW_FADE_USED
+					shadow = sample_directional_depth_fade(pssm_coord, scene_data.directional_shadow_pixel_size * directional_lights.data[i].soft_shadow_scale * (blur_factor + (1.0 - blur_factor) * blend_split_weight), directional_lights.data[i].shadow_atlas_rects[split], directional_lights.data[i].shadow_z_range[split], directional_shadow_fade_distance, scene_data.taa_frame_count);
+#else
 					shadow = half(sample_directional_pcf_shadow(directional_shadow_atlas, scene_data.directional_shadow_pixel_size * directional_lights.data[i].soft_shadow_scale * (blur_factor + (1.0 - blur_factor) * blend_split_weight), pssm_coord, scene_data.taa_frame_count));
+#endif
 
 					if (blend_split) {
 						half pssm_blend;
@@ -2084,8 +2135,19 @@ void main() {
 
 						pssm_coord /= pssm_coord.w;
 
+#ifdef DIRECTIONAL_SHADOW_FADE_USED
+						int blend_split_index = min(split + 1, 3);
+						half shadow2 = sample_directional_depth_fade(pssm_coord, scene_data.directional_shadow_pixel_size * directional_lights.data[i].soft_shadow_scale * (blur_factor2 + (1.0 - blur_factor2) * blend_split_weight), directional_lights.data[i].shadow_atlas_rects[blend_split_index], directional_lights.data[i].shadow_z_range[blend_split_index], directional_shadow_fade_distance, scene_data.taa_frame_count);
+#else
 						half shadow2 = half(sample_directional_pcf_shadow(directional_shadow_atlas, scene_data.directional_shadow_pixel_size * directional_lights.data[i].soft_shadow_scale * (blur_factor2 + (1.0 - blur_factor2) * blend_split_weight), pssm_coord, scene_data.taa_frame_count));
+#endif
 						shadow = mix(shadow, shadow2, pssm_blend);
+#ifdef USE_WIDE_DIRECTIONAL_SHADOW
+						if (pssm_blend > half(0.0)) {
+							half wide_shadow2 = sample_wide_directional_shadow(pssm_coord, directional_lights.data[i].shadow_atlas_rects[split + 1], wide_step);
+							wide_shadow = mix(wide_shadow, wide_shadow2, pssm_blend);
+						}
+#endif
 					}
 
 #ifdef USE_LIGHTMAP
@@ -2096,6 +2158,9 @@ void main() {
 					} else {
 #endif
 						shadow = mix(shadow, half(1.0), half(smoothstep(directional_lights.data[i].fade_from, directional_lights.data[i].fade_to, vertex.z)));
+#ifdef USE_WIDE_DIRECTIONAL_SHADOW
+					wide_shadows[i] = mix(wide_shadow, half(1.0), half(smoothstep(directional_lights.data[i].fade_from, directional_lights.data[i].fade_to, vertex.z)));
+#endif
 #ifdef USE_LIGHTMAP
 					}
 #endif
@@ -2140,6 +2205,16 @@ void main() {
 			half shadow = half(1.0);
 #ifndef SHADOWS_DISABLED
 			shadow = mix(half(1.0), shadows[i], half(directional_lights.data[i].shadow_opacity));
+#ifdef USE_WIDE_DIRECTIONAL_SHADOW
+			wide_directional_shadow = float(shadow);
+			if (directional_lights.data[i].shadow_opacity > 0.001
+#ifdef USE_LIGHTMAP
+					&& shadowmask_mode == LIGHTMAP_SHADOWMASK_MODE_NONE
+#endif
+			) {
+				wide_directional_shadow = float(mix(half(1.0), wide_shadows[i], half(directional_lights.data[i].shadow_opacity)));
+			}
+#endif
 #endif
 			blur_shadow(shadow);
 

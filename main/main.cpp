@@ -29,6 +29,7 @@
 /**************************************************************************/
 
 #include "main.h"
+#include "frame_cpu_profile.h"
 
 #include "core/config/engine.h"
 #include "core/config/project_settings.h"
@@ -4813,6 +4814,8 @@ static uint64_t navigation_process_max = 0;
 // will terminate the program. In case of failure, the OS exit code needs
 // to be set explicitly here (defaults to EXIT_SUCCESS).
 bool Main::iteration() {
+	FrameCPUProfile::Frame cpu_frame;
+	FrameCPUProfile::Scope cpu_phase("Frame preparation");
 	GodotProfileZone("Main::iteration");
 	GodotProfileZoneGroupedFirst(_profile_zone, "prepare");
 	iterating++;
@@ -4860,6 +4863,7 @@ bool Main::iteration() {
 	XRServer::get_singleton()->_process();
 #endif // XR_DISABLED
 
+	cpu_phase.next("Physics / fixed updates");
 	GodotProfileZoneGrouped(_profile_zone, "physics");
 	for (int iters = 0; iters < advance.physics_steps; ++iters) {
 		GodotProfileZone("Physics Step");
@@ -4950,13 +4954,16 @@ bool Main::iteration() {
 		Input::get_singleton()->flush_buffered_events();
 	}
 
+	cpu_phase.next("Scene callbacks and processing");
 	uint64_t process_begin = OS::get_singleton()->get_ticks_usec();
 
 	GodotProfileZoneGrouped(_profile_zone, "process");
 	if (OS::get_singleton()->get_main_loop()->process(process_step * time_scale)) {
 		exit = true;
 	}
+	cpu_phase.next("Deferred calls");
 	message_queue->flush();
+	cpu_phase.next("Navigation updates");
 
 #ifndef NAVIGATION_2D_DISABLED
 	GodotProfileZoneGrouped(_profile_zone, "process 2D navigation");
@@ -4967,9 +4974,11 @@ bool Main::iteration() {
 	NavigationServer3D::get_singleton()->process(process_step * time_scale);
 #endif // NAVIGATION_3D_DISABLED
 
+	cpu_phase.next("Render synchronization");
 	GodotProfileZoneGrouped(_profile_zone, "RenderingServer::sync");
 	RenderingServer::get_singleton()->sync(); //sync if still drawing from previous frames.
 
+	cpu_phase.next("Render dispatch and callbacks");
 	GodotProfileZoneGrouped(_profile_zone, "RenderingServer::draw");
 	const bool has_pending_resources_for_processing = RD::get_singleton() && RD::get_singleton()->has_pending_resources_for_processing();
 	bool wants_present = (DisplayServer::get_singleton()->can_any_window_draw() ||
@@ -4994,6 +5003,7 @@ bool Main::iteration() {
 	process_max = MAX(process_ticks, process_max);
 	uint64_t frame_time = OS::get_singleton()->get_ticks_usec() - ticks;
 
+	cpu_phase.next("Extension and script maintenance");
 	GodotProfileZoneGrouped(_profile_zone, "GDExtensionManager::frame");
 	GDExtensionManager::get_singleton()->frame();
 
@@ -5002,6 +5012,7 @@ bool Main::iteration() {
 		ScriptServer::get_language(i)->frame();
 	}
 
+	cpu_phase.next("Audio update");
 	GodotProfileZoneGrouped(_profile_zone, "AudioServer::update");
 	AudioServer::get_singleton()->update();
 
@@ -5068,6 +5079,7 @@ bool Main::iteration() {
 	SceneTree *scene_tree = SceneTree::get_singleton();
 	bool wake_for_events = scene_tree && scene_tree->is_accessibility_enabled();
 
+	cpu_phase.next("Frame pacing / sleep");
 	GodotProfileZoneGrouped(_profile_zone, "OS::add_frame_delay");
 	OS::get_singleton()->add_frame_delay(DisplayServer::get_singleton()->window_can_draw(), wake_for_events);
 

@@ -60,6 +60,10 @@ layout(set = 0, binding = 3) uniform sampler2D source_color_correction;
 layout(set = 0, binding = 3) uniform sampler3D source_color_correction;
 #endif
 
+layout(set = 0, binding = 4) uniform sampler3D source_gt7_lut;
+
+#include "gt7_lut_inc.glsl"
+
 layout(constant_id = 0) const bool use_bcs = false;
 layout(constant_id = 1) const bool use_glow = false;
 layout(constant_id = 2) const bool use_glow_map = false;
@@ -78,6 +82,7 @@ layout(constant_id = 14) const bool glow_mode_screen = false;
 layout(constant_id = 15) const bool glow_mode_softlight = false;
 layout(constant_id = 16) const bool glow_mode_replace = false;
 layout(constant_id = 17) const bool glow_mode_mix = false;
+layout(constant_id = 18) const bool tonemapper_gt7 = false;
 
 layout(push_constant, std430) uniform Params {
 	vec3 bcs;
@@ -263,6 +268,8 @@ vec3 apply_tonemapping(vec3 color) { // inputs are LINEAR
 		return tonemap_filmic(color);
 	} else if (tonemapper_aces) {
 		return tonemap_aces(color);
+	} else if (tonemapper_gt7) {
+		return tonemap_gt7(color);
 	} else { // tonemapper_agx
 		return tonemap_agx(color);
 	}

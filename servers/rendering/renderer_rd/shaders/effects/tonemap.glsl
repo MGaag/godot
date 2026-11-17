@@ -55,6 +55,10 @@ layout(set = 3, binding = 0) uniform sampler2D source_color_correction;
 layout(set = 3, binding = 0) uniform sampler3D source_color_correction;
 #endif
 
+layout(set = 3, binding = 1) uniform sampler3D source_gt7_lut;
+
+#include "gt7_lut_inc.glsl"
+
 #define FLAG_USE_BCS (1 << 0)
 #define FLAG_USE_GLOW (1 << 1)
 #define FLAG_USE_AUTO_EXPOSURE (1 << 2)
@@ -242,6 +246,7 @@ vec3 srgb_to_linear(vec3 color) {
 #define TONEMAPPER_FILMIC 2
 #define TONEMAPPER_ACES 3
 #define TONEMAPPER_AGX 4
+#define TONEMAPPER_GT7 5
 
 vec3 apply_tonemapping(vec3 color) { // inputs are LINEAR
 	if (params.tonemapper == TONEMAPPER_LINEAR) {
@@ -258,6 +263,8 @@ vec3 apply_tonemapping(vec3 color) { // inputs are LINEAR
 		return tonemap_filmic(color);
 	} else if (params.tonemapper == TONEMAPPER_ACES) {
 		return tonemap_aces(color);
+	} else if (params.tonemapper == TONEMAPPER_GT7) {
+		return tonemap_gt7(color);
 	} else { // TONEMAPPER_AGX
 		return tonemap_agx(color);
 	}

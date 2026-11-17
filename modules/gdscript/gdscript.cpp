@@ -1419,8 +1419,6 @@ GDScript::UpdatableFuncPtr::UpdatableFuncPtr(GDScriptFunction *p_function) {
 }
 
 GDScript::UpdatableFuncPtr::~UpdatableFuncPtr() {
-	ERR_FAIL_NULL(script);
-
 	if (list_element) {
 		MutexLock script_lock(script->func_ptrs_to_update_mutex);
 		list_element->erase();
@@ -1458,7 +1456,12 @@ void GDScript::clear() {
 		MutexLock lock(func_ptrs_to_update_mutex);
 		for (UpdatableFuncPtr *updatable : func_ptrs_to_update) {
 			updatable->ptr = nullptr;
+			// Lambdas can outlive the script during shutdown. Detach their
+			// tracking entries before this script's list is destroyed.
+			updatable->list_element = nullptr;
+			updatable->script = nullptr;
 		}
+		func_ptrs_to_update.clear();
 	}
 
 	for (const KeyValue<StringName, GDScriptFunction *> &E : member_functions) {

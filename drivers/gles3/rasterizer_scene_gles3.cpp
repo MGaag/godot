@@ -1435,7 +1435,8 @@ void RasterizerSceneGLES3::_fill_render_list(RenderListType p_render_list, const
 
 		float lod_distance = 0.0;
 
-		if (p_render_data->cam_orthogonal) {
+		// Shadow passes have a different light projection but retain the viewing camera LOD policy.
+		if (p_render_data->main_cam_orthogonal) {
 			lod_distance = 1.0;
 		} else {
 			Vector3 aabb_min = inst->transformed_aabb.position;
@@ -1792,6 +1793,40 @@ void RasterizerSceneGLES3::_setup_lights(const RenderDataGLES3 *p_render_data, b
 
 					shadow_data.shadow_atlas_pixel_size = 1.0 / light_storage->directional_shadow_get_size();
 
+					shadow_data.history_weight = 0.0;
+					Ref<RenderSceneBuffersGLES3> history_rb = p_render_data->render_buffers;
+					if (history_rb.is_valid() && p_render_data->reflection_probe.is_null() && bool(GLOBAL_GET("rendering/lights_and_shadows/directional_shadow/temporal_filter"))) {
+						auto &history = history_rb->shadow_history;
+						Vector3 world_direction = li->transform.basis.get_column(2).normalized();
+						bool valid = history.depth && history.light == li->self && history.environment == p_render_data->environment && history.size == light_storage->directional_shadow_get_size() && history.frame + 1 == RSG::rasterizer->get_frame_number() && history.cascades == limit + 1 && history.direction.dot(world_direction) > 0.9999 && history.camera.origin.distance_to(p_render_data->cam_transform.origin) < 5.0 && history.camera.basis.get_column(2).dot(p_render_data->cam_transform.basis.get_column(2)) > 0.95;
+						if (valid) {
+							shadow_data.history_weight = 0.5;
+							Transform3D previous_view = history.camera.affine_inverse() * p_render_data->cam_transform;
+							for (int axis = 0; axis < 3; axis++) {
+								shadow_data.history_camera_depth[axis] = -previous_view.basis.get_column(axis).z;
+							}
+							shadow_data.history_camera_depth[3] = -previous_view.origin.z;
+							Vector3 view_direction = p_render_data->inv_cam_transform.basis.xform(history.direction);
+							for (int axis = 0; axis < 3; axis++) {
+								shadow_data.history_direction[axis] = view_direction[axis];
+							}
+							for (int cascade = 0; cascade < 4; cascade++) {
+								GLES3::MaterialStorage::store_camera(history.matrices[cascade] * Projection(p_render_data->cam_transform), shadow_data.history_matrices[cascade]);
+								Rect2 rect = cascade < history.cascades ? history.rects[cascade] : Rect2();
+								shadow_data.history_rects[cascade][0] = rect.position.x;
+								shadow_data.history_rects[cascade][1] = rect.position.y;
+								shadow_data.history_rects[cascade][2] = rect.get_end().x;
+								shadow_data.history_rects[cascade][3] = rect.get_end().y;
+								shadow_data.history_bias[cascade] = history.bias[cascade];
+								shadow_data.history_splits[cascade] = history.splits[cascade];
+								const Projection &prior = history.matrices[cascade];
+								float prior_scale = Vector3(prior[0][2], prior[1][2], prior[2][2]).dot(history.direction);
+								shadow_data.depth_decode[cascade][2] = 1.0 / prior_scale;
+								shadow_data.depth_decode[cascade][3] = -prior[3][2] / prior_scale;
+							}
+						}
+					}
+
 					shadow_data.blend_splits = uint32_t((shadow_mode != RSE::LIGHT_DIRECTIONAL_SHADOW_ORTHOGONAL) && light_storage->light_directional_get_blend_splits(base));
 					for (int j = 0; j < 4; j++) {
 						Rect2 atlas_rect = li->shadow_transform[j].atlas_rect;
@@ -1815,6 +1850,13 @@ void RasterizerSceneGLES3::_setup_lights(const RenderDataGLES3 *p_render_data, b
 						shadow_data.shadow_split_offsets[j] = split;
 						shadow_data.shadow_normal_bias[j] = light_storage->light_get_param(base, RSE::LIGHT_PARAM_SHADOW_NORMAL_BIAS) * li->shadow_transform[j].shadow_texel_size;
 						GLES3::MaterialStorage::store_camera(shadow_mtx, shadow_data.shadow_matrices[j]);
+						Projection world_shadow = rectm * bias * matrix * Projection(li->shadow_transform[j].transform.affine_inverse());
+						Vector3 world_direction = li->transform.basis.get_column(2).normalized();
+						float depth_scale = Vector3(world_shadow[0][2], world_shadow[1][2], world_shadow[2][2]).dot(world_direction);
+						shadow_data.depth_decode[j][0] = 1.0 / depth_scale;
+						shadow_data.depth_decode[j][1] = -world_shadow[3][2] / depth_scale;
+						// One texel permits rasterization drift; larger unmatched blocker changes reject history.
+						shadow_data.history_depth_tolerance[j] = MAX(0.02f, li->shadow_transform[j].shadow_texel_size);
 					}
 					float fade_start = light_storage->light_get_param(base, RSE::LIGHT_PARAM_SHADOW_FADE_START);
 					shadow_data.fade_from = -shadow_data.shadow_split_offsets[3] * MIN(fade_start, 0.999);
@@ -2148,6 +2190,7 @@ void RasterizerSceneGLES3::_setup_lights(const RenderDataGLES3 *p_render_data, b
 }
 
 // Render shadows
+// Dispatch shadow draws with the main viewing-camera LOD contract intact.
 void RasterizerSceneGLES3::_render_shadows(const RenderDataGLES3 *p_render_data, const Size2i &p_viewport_size) {
 	GLES3::LightStorage *light_storage = GLES3::LightStorage::get_singleton();
 
@@ -2183,20 +2226,21 @@ void RasterizerSceneGLES3::_render_shadows(const RenderDataGLES3 *p_render_data,
 
 		// Render cubemap shadows.
 		for (const int &index : cube_shadows) {
-			_render_shadow_pass(p_render_data->render_shadows[index].light, p_render_data->shadow_atlas, p_render_data->render_shadows[index].pass, p_render_data->render_shadows[index].instances, lod_distance_multiplier, p_render_data->screen_mesh_lod_threshold, p_render_data->render_info, p_viewport_size, p_render_data->cam_transform);
+			_render_shadow_pass(p_render_data->render_shadows[index].light, p_render_data->shadow_atlas, p_render_data->render_shadows[index].pass, p_render_data->render_shadows[index].instances, lod_distance_multiplier, p_render_data->screen_mesh_lod_threshold, p_render_data->render_info, p_viewport_size, p_render_data->cam_transform, p_render_data->main_cam_orthogonal);
 		}
 		// Render directional shadows.
 		for (uint32_t i = 0; i < directional_shadows.size(); i++) {
-			_render_shadow_pass(p_render_data->render_shadows[directional_shadows[i]].light, p_render_data->shadow_atlas, p_render_data->render_shadows[directional_shadows[i]].pass, p_render_data->render_shadows[directional_shadows[i]].instances, lod_distance_multiplier, p_render_data->screen_mesh_lod_threshold, p_render_data->render_info, p_viewport_size, p_render_data->cam_transform);
+			_render_shadow_pass(p_render_data->render_shadows[directional_shadows[i]].light, p_render_data->shadow_atlas, p_render_data->render_shadows[directional_shadows[i]].pass, p_render_data->render_shadows[directional_shadows[i]].instances, lod_distance_multiplier, p_render_data->screen_mesh_lod_threshold, p_render_data->render_info, p_viewport_size, p_render_data->cam_transform, p_render_data->main_cam_orthogonal);
 		}
 		// Render positional shadows (Spotlight, Arealight, and Omnilight with dual-paraboloid).
 		for (uint32_t i = 0; i < shadows.size(); i++) {
-			_render_shadow_pass(p_render_data->render_shadows[shadows[i]].light, p_render_data->shadow_atlas, p_render_data->render_shadows[shadows[i]].pass, p_render_data->render_shadows[shadows[i]].instances, lod_distance_multiplier, p_render_data->screen_mesh_lod_threshold, p_render_data->render_info, p_viewport_size, p_render_data->cam_transform);
+			_render_shadow_pass(p_render_data->render_shadows[shadows[i]].light, p_render_data->shadow_atlas, p_render_data->render_shadows[shadows[i]].pass, p_render_data->render_shadows[shadows[i]].instances, lod_distance_multiplier, p_render_data->screen_mesh_lod_threshold, p_render_data->render_info, p_viewport_size, p_render_data->cam_transform, p_render_data->main_cam_orthogonal);
 		}
 	}
 }
 
-void RasterizerSceneGLES3::_render_shadow_pass(RID p_light, RID p_shadow_atlas, int p_pass, const PagedArray<RenderGeometryInstance *> &p_instances, float p_lod_distance_multiplier, float p_screen_mesh_lod_threshold, RenderingServerTypes::RenderInfo *p_render_info, const Size2i &p_viewport_size, const Transform3D &p_main_cam_transform) {
+// Build light-camera draw data without replacing the viewing camera used for caster LOD.
+void RasterizerSceneGLES3::_render_shadow_pass(RID p_light, RID p_shadow_atlas, int p_pass, const PagedArray<RenderGeometryInstance *> &p_instances, float p_lod_distance_multiplier, float p_screen_mesh_lod_threshold, RenderingServerTypes::RenderInfo *p_render_info, const Size2i &p_viewport_size, const Transform3D &p_main_cam_transform, bool p_main_cam_orthogonal) {
 	GLES3::LightStorage *light_storage = GLES3::LightStorage::get_singleton();
 
 	ERR_FAIL_COND(!light_storage->owns_light_instance(p_light));
@@ -2333,6 +2377,7 @@ void RasterizerSceneGLES3::_render_shadow_pass(RID p_light, RID p_shadow_atlas, 
 	render_data.z_near = 0.0;
 	render_data.lod_distance_multiplier = p_lod_distance_multiplier;
 	render_data.main_cam_transform = p_main_cam_transform;
+	render_data.main_cam_orthogonal = p_main_cam_orthogonal;
 
 	render_data.instances = &p_instances;
 	render_data.render_info = p_render_info;
@@ -2447,6 +2492,7 @@ void RasterizerSceneGLES3::render_scene(const Ref<RenderSceneBuffers> &p_render_
 		render_data.cam_orthogonal = p_camera_data->is_orthogonal;
 		render_data.camera_visible_layers = p_camera_data->visible_layers;
 		render_data.main_cam_transform = p_camera_data->main_transform;
+		render_data.main_cam_orthogonal = p_camera_data->is_orthogonal;
 
 		render_data.view_count = p_camera_data->view_count;
 		for (uint32_t v = 0; v < p_camera_data->view_count; v++) {
@@ -2933,6 +2979,10 @@ void RasterizerSceneGLES3::render_scene(const Ref<RenderSceneBuffers> &p_render_
 		_render_buffers_debug_draw(rb, p_shadow_atlas, fbo);
 	}
 
+	_capture_shadow_history(&render_data);
+	glBindSampler(GLES3::Config::get_singleton()->max_texture_image_units - 4, 0);
+	glBindSampler(GLES3::Config::get_singleton()->max_texture_image_units - 5, 0);
+
 	// Reset stuff that may trip up the next process.
 	scene_state.reset_gl_state();
 	glUseProgram(0);
@@ -2944,6 +2994,81 @@ void RasterizerSceneGLES3::render_scene(const Ref<RenderSceneBuffers> &p_render_
 	}
 
 	glActiveTexture(GL_TEXTURE0);
+}
+
+// Copy the authoritative current atlas after drawing; each view retains only its own last capture.
+void RasterizerSceneGLES3::_capture_shadow_history(const RenderDataGLES3 *p_render_data) {
+	Ref<RenderSceneBuffersGLES3> rb = p_render_data->render_buffers;
+	if (rb.is_null() || p_render_data->reflection_probe.is_valid()) {
+		return;
+	}
+	if (!bool(GLOBAL_GET("rendering/lights_and_shadows/directional_shadow/temporal_filter")) || p_render_data->directional_shadow_count != 1) {
+		rb->clear_shadow_history();
+		return;
+	}
+	GLES3::LightStorage *storage = GLES3::LightStorage::get_singleton();
+	GLES3::LightInstance *light = nullptr;
+	for (uint32_t i = 0; i < p_render_data->lights->size(); i++) {
+		GLES3::LightInstance *candidate = storage->get_light_instance((*p_render_data->lights)[i]);
+		if (candidate && candidate->light_type == RSE::LIGHT_DIRECTIONAL && storage->light_has_shadow(candidate->light)) {
+			light = candidate;
+			break;
+		}
+	}
+	if (!light || !storage->directional_shadow_get_texture()) {
+		rb->clear_shadow_history();
+		return;
+	}
+	int size = storage->directional_shadow_get_size();
+	bool use_16_bits = GLOBAL_GET("rendering/lights_and_shadows/directional_shadow/16_bits");
+	if (rb->shadow_history.size != size) {
+		rb->clear_shadow_history();
+	}
+	auto &history = rb->shadow_history;
+	if (!history.depth) {
+		glGenTextures(1, &history.depth);
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, history.depth);
+		glTexImage2D(GL_TEXTURE_2D, 0, use_16_bits ? GL_DEPTH_COMPONENT16 : GL_DEPTH_COMPONENT24, size, size, 0, GL_DEPTH_COMPONENT, use_16_bits ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT, nullptr);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_GREATER);
+		glGenFramebuffers(1, &history.fbo);
+		glBindFramebuffer(GL_FRAMEBUFFER, history.fbo);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, history.depth, 0);
+		if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+			rb->clear_shadow_history();
+			WARN_PRINT_ONCE("Directional shadow temporal history framebuffer unavailable.");
+			return;
+		}
+		GLES3::Utilities::get_singleton()->texture_allocated_data(history.depth, uint64_t(size) * size * (use_16_bits ? 2 : 4), "Directional shadow history");
+		history.size = size;
+	}
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, storage->direction_shadow_get_fb());
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, history.fbo);
+	glBlitFramebuffer(0, 0, size, size, 0, 0, size, size, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+	history.light = light->self;
+	history.environment = p_render_data->environment;
+	history.camera = p_render_data->cam_transform;
+	history.direction = light->transform.basis.get_column(2).normalized();
+	history.frame = RSG::rasterizer->get_frame_number();
+	RSE::LightDirectionalShadowMode mode = storage->light_directional_get_shadow_mode(light->light);
+	history.cascades = mode == RSE::LIGHT_DIRECTIONAL_SHADOW_ORTHOGONAL ? 1 : (mode == RSE::LIGHT_DIRECTIONAL_SHADOW_PARALLEL_2_SPLITS ? 2 : 4);
+	for (int cascade = 0; cascade < 4; cascade++) {
+		Projection correction;
+		correction.set_depth_correction(false, true, false);
+		Projection bias;
+		bias.set_light_bias();
+		Projection rect;
+		rect.set_light_atlas_rect(light->shadow_transform[cascade].atlas_rect);
+		history.matrices[cascade] = rect * bias * correction * light->shadow_transform[cascade].camera * Projection(light->shadow_transform[cascade].transform.affine_inverse());
+		history.rects[cascade] = light->shadow_transform[cascade].atlas_rect;
+		history.splits[cascade] = light->shadow_transform[cascade].split;
+		history.bias[cascade] = storage->light_get_param(light->light, RSE::LIGHT_PARAM_SHADOW_NORMAL_BIAS) * light->shadow_transform[cascade].shadow_texel_size;
+	}
 }
 
 void RasterizerSceneGLES3::_render_post_processing(const RenderDataGLES3 *p_render_data) {
@@ -3265,6 +3390,11 @@ void RasterizerSceneGLES3::_render_list_template(RenderListParameters *p_params,
 	for (uint32_t i = p_from_element; i < p_to_element; i++) {
 		GeometryInstanceSurface *surf = p_params->elements[i];
 		GeometryInstanceGLES3 *inst = surf->owner;
+		// A preceding non-lightmapped shadow draw must not change lightmap filtering.
+		if (inst->lightmap_instance.is_valid()) {
+			glBindSampler(GLES3::Config::get_singleton()->max_texture_image_units - 4, 0);
+			glBindSampler(GLES3::Config::get_singleton()->max_texture_image_units - 5, 0);
+		}
 
 		if (p_pass_mode == PASS_MODE_COLOR && !(surf->flags & GeometryInstanceSurface::FLAG_PASS_OPAQUE)) {
 			continue; // Objects with "Depth-prepass" transparency are included in both render lists, but should only be rendered in the transparent pass
@@ -3732,6 +3862,19 @@ void RasterizerSceneGLES3::_render_list_template(RenderListParameters *p_params,
 						GLuint tex = GLES3::LightStorage::get_singleton()->directional_shadow_get_texture();
 						glActiveTexture(GL_TEXTURE0 + config->max_texture_image_units - 3);
 						glBindTexture(GL_TEXTURE_2D, tex);
+						glActiveTexture(GL_TEXTURE0 + config->max_texture_image_units - 1);
+						GLuint history_depth = p_render_data->render_buffers.is_valid() ? p_render_data->render_buffers->shadow_history.depth : 0;
+						glBindTexture(GL_TEXTURE_2D, history_depth ? history_depth : tex);
+						// Non-lightmapped receivers reuse reserved lightmap units for raw depth reads.
+						for (int unit = 4; unit <= 5; unit++) {
+							glBindSampler(config->max_texture_image_units - unit, inst->lightmap_instance.is_valid() ? 0 : shadow_history_raw_sampler);
+						}
+						if (!inst->lightmap_instance.is_valid()) {
+							glActiveTexture(GL_TEXTURE0 + config->max_texture_image_units - 4);
+							glBindTexture(GL_TEXTURE_2D, tex);
+							glActiveTexture(GL_TEXTURE0 + config->max_texture_image_units - 5);
+							glBindTexture(GL_TEXTURE_2D, history_depth ? history_depth : tex);
+						}
 
 						if (inst->lightmap_instance.is_valid()) {
 							// Use shadowmasks for directional light passes.
@@ -4065,6 +4208,7 @@ void RasterizerSceneGLES3::render_particle_collider_heightfield(RID p_collider, 
 	render_data.z_near = 0.0;
 	render_data.z_far = cm.get_z_far();
 	render_data.main_cam_transform = cam_xform;
+	render_data.main_cam_orthogonal = true;
 
 	render_data.instances = &p_instances;
 
@@ -4532,6 +4676,13 @@ void RasterizerSceneGLES3::material_set_use_debanding(bool p_enable) {
 }
 
 RasterizerSceneGLES3::RasterizerSceneGLES3() {
+	// Sampler objects permit raw depth validation alongside the unchanged hardware PCF path.
+	glGenSamplers(1, &shadow_history_raw_sampler);
+	glSamplerParameteri(shadow_history_raw_sampler, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+	glSamplerParameteri(shadow_history_raw_sampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glSamplerParameteri(shadow_history_raw_sampler, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glSamplerParameteri(shadow_history_raw_sampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glSamplerParameteri(shadow_history_raw_sampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	singleton = this;
 
 	GLES3::MaterialStorage *material_storage = GLES3::MaterialStorage::get_singleton();
@@ -4755,6 +4906,7 @@ void sky() {
 }
 
 RasterizerSceneGLES3::~RasterizerSceneGLES3() {
+	glDeleteSamplers(1, &shadow_history_raw_sampler);
 	if (ltc.lut1_texture.is_valid()) {
 		RS::get_singleton()->free_rid(ltc.lut1_texture);
 	}

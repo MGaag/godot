@@ -136,6 +136,7 @@ ShaderTypes::ShaderTypes() {
 
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["VERTEX"] = constt(ShaderLanguage::TYPE_VEC3);
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["LIGHT_VERTEX"] = ShaderLanguage::TYPE_VEC3;
+	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["DIRECTIONAL_SHADOW_FADE_DISTANCE"] = ShaderLanguage::TYPE_FLOAT;
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["FRAGCOORD"] = constt(ShaderLanguage::TYPE_VEC4);
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["FRONT_FACING"] = constt(ShaderLanguage::TYPE_BOOL);
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["NORMAL"] = ShaderLanguage::TYPE_VEC3;
@@ -146,6 +147,7 @@ ShaderTypes::ShaderTypes() {
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["NORMAL_MAP_DEPTH"] = ShaderLanguage::TYPE_FLOAT;
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["BENT_NORMAL_MAP"] = ShaderLanguage::TYPE_VEC3;
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["BENT_CONE_APERTURE"] = ShaderLanguage::TYPE_FLOAT;
+	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["BENT_CONE_WEIGHT"] = ShaderLanguage::TYPE_FLOAT;
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["UV"] = constt(ShaderLanguage::TYPE_VEC2);
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["UV2"] = constt(ShaderLanguage::TYPE_VEC2);
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["COLOR"] = constt(ShaderLanguage::TYPE_VEC4);
@@ -223,6 +225,7 @@ ShaderTypes::ShaderTypes() {
 	shader_modes[RSE::SHADER_SPATIAL].functions["light"].built_ins["LIGHT_AREA_DIFFUSE_MULTIPLIER"] = constt(ShaderLanguage::TYPE_VEC3);
 	shader_modes[RSE::SHADER_SPATIAL].functions["light"].built_ins["LIGHT_AREA_SPECULAR_MULTIPLIER"] = constt(ShaderLanguage::TYPE_VEC3);
 	shader_modes[RSE::SHADER_SPATIAL].functions["light"].built_ins["ATTENUATION"] = constt(ShaderLanguage::TYPE_FLOAT);
+	shader_modes[RSE::SHADER_SPATIAL].functions["light"].built_ins["WIDE_DIRECTIONAL_SHADOW"] = constt(ShaderLanguage::TYPE_FLOAT);
 	shader_modes[RSE::SHADER_SPATIAL].functions["light"].built_ins["ALBEDO"] = constt(ShaderLanguage::TYPE_VEC3);
 	shader_modes[RSE::SHADER_SPATIAL].functions["light"].built_ins["BACKLIGHT"] = constt(ShaderLanguage::TYPE_VEC3);
 	shader_modes[RSE::SHADER_SPATIAL].functions["light"].built_ins["METALLIC"] = constt(ShaderLanguage::TYPE_FLOAT);

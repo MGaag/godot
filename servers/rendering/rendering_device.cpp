@@ -29,6 +29,8 @@
 /**************************************************************************/
 
 #include "rendering_device.h"
+
+#include "main/frame_cpu_profile.h"
 #include "rendering_device.compat.inc"
 
 #include "core/config/engine.h"
@@ -47,6 +49,8 @@
 
 #ifdef MODULE_GLSLANG_ENABLED
 #include "modules/glslang/shader_compile.h"
+
+// Owns device resources and asynchronous GPU queries; optional in-pass profiling reserves complete timestamp pairs without restarting passes. RenderingDeviceGraph records their execution order.
 #endif
 
 #define FORCE_SEPARATE_PRESENT_QUEUE 0
@@ -4945,6 +4949,8 @@ RID RenderingDevice::render_pipeline_create(RID p_shader, FramebufferFormatID p_
 	}
 
 	RenderPipeline pipeline;
+	// These contiguous enum values are the triangle topologies, including adjacency.
+	pipeline.triangle_topology = p_render_primitive >= RENDER_PRIMITIVE_TRIANGLES && p_render_primitive <= RENDER_PRIMITIVE_TRIANGLE_STRIPS_WITH_RESTART_INDEX;
 	pipeline.driver_id = driver->render_pipeline_create(
 			shader->driver_id,
 			driver_vertex_format,
@@ -5380,6 +5386,7 @@ Error RenderingDevice::screen_create(DisplayServerEnums::WindowID p_screen) {
 }
 
 Error RenderingDevice::screen_prepare_for_drawing(DisplayServerEnums::WindowID p_screen) {
+	FrameCPUProfile::Scope cpu_acquire("Swapchain image acquisition");
 	_THREAD_SAFE_METHOD_
 
 	// After submitting work, acquire the swapchain image(s).
@@ -5707,6 +5714,7 @@ void RenderingDevice::draw_list_bind_render_pipeline(DrawListID p_list, RID p_re
 	}
 
 	draw_list.state.pipeline = p_render_pipeline;
+	draw_list.state.triangle_topology = pipeline->triangle_topology;
 
 	draw_graph.add_draw_list_bind_pipeline(pipeline->driver_id, pipeline->stage_bits);
 
@@ -6133,6 +6141,9 @@ void RenderingDevice::draw_list_draw(DrawListID p_list, bool p_use_indices, uint
 				"Index amount (" + itos(to_draw) + ") must be a multiple of the amount of indices required by the render primitive (" + itos(draw_list.validation.pipeline_primitive_divisor) + ").");
 #endif
 
+		if (unlikely(draw_statistics_capture)) {
+			_prepare_primitive_query();
+		}
 		draw_graph.add_draw_list_draw_indexed(to_draw, p_instances, 0);
 	} else {
 		uint32_t to_draw;
@@ -6155,13 +6166,19 @@ void RenderingDevice::draw_list_draw(DrawListID p_list, bool p_use_indices, uint
 				"Vertex amount (" + itos(to_draw) + ") must be a multiple of the amount of vertices required by the render primitive (" + itos(draw_list.validation.pipeline_primitive_divisor) + ").");
 #endif
 
+		if (unlikely(draw_statistics_capture)) {
+			_prepare_primitive_query();
+		}
 		draw_graph.add_draw_list_draw(to_draw, p_instances);
 	}
 
+	if (unlikely(draw_statistics_capture)) {
+		_record_draw_counts(1, p_instances, true);
+	}
 	draw_list.state.draw_count++;
 }
 
-void RenderingDevice::draw_list_draw_indirect(DrawListID p_list, bool p_use_indices, RID p_buffer, uint32_t p_offset, uint32_t p_draw_count, uint32_t p_stride) {
+void RenderingDevice::draw_list_draw_indirect(DrawListID p_list, bool p_use_indices, RID p_buffer, uint32_t p_offset, uint32_t p_draw_count, uint32_t p_stride, uint32_t p_profile_primitives_per_instance) {
 	ERR_RENDER_THREAD_GUARD();
 
 	ERR_FAIL_COND(!draw_list.active);
@@ -6254,13 +6271,31 @@ void RenderingDevice::draw_list_draw_indirect(DrawListID p_list, bool p_use_indi
 
 		ERR_FAIL_COND_MSG(p_offset + 20 > buffer->size, "Offset provided (+20) is past the end of buffer.");
 
+		if (unlikely(draw_statistics_capture)) {
+			// Isolate indirect commands: their processed instance count is GPU-owned.
+			_end_primitive_query();
+			_prepare_primitive_query();
+		}
 		draw_graph.add_draw_list_draw_indexed_indirect(buffer->driver_id, p_offset, p_draw_count, p_stride);
 	} else {
 		ERR_FAIL_COND_MSG(p_offset + 16 > buffer->size, "Offset provided (+16) is past the end of buffer.");
 
+		if (unlikely(draw_statistics_capture)) {
+			// Isolate indirect commands: their processed instance count is GPU-owned.
+			_end_primitive_query();
+			_prepare_primitive_query();
+		}
 		draw_graph.add_draw_list_draw_indirect(buffer->driver_id, p_offset, p_draw_count, p_stride);
 	}
 
+	if (unlikely(draw_statistics_capture)) {
+		const bool known = p_draw_count == 1 && p_profile_primitives_per_instance > 0 && draw_list.primitive_query_index >= 0;
+		_record_draw_counts(p_draw_count, 0, known);
+		if (known) {
+			frames[frame].primitive_instance_divisors[draw_list.primitive_query_index] = p_profile_primitives_per_instance;
+		}
+		_end_primitive_query();
+	}
 	draw_list.state.draw_count++;
 
 	if (buffer->draw_tracker != nullptr) {
@@ -6349,11 +6384,89 @@ void RenderingDevice::_draw_list_end(Rect2i *r_last_viewport) {
 	draw_list = DrawList();
 }
 
+// Count submissions at the same owner boundary as the hardware triangle scopes.
+void RenderingDevice::_record_draw_counts(uint32_t p_batches, uint32_t p_instances, bool p_instances_known) {
+	Frame &current = frames[frame];
+	const String &name = draw_list.primitive_profile_name.is_empty() ? draw_statistics_category : draw_list.primitive_profile_name;
+	current.batch_counts[name] = int64_t(current.batch_counts.get(name, 0)) + p_batches;
+	int64_t count = current.instance_counts.get(name, 0);
+	current.instance_counts[name] = p_instances_known && count >= 0 ? count + p_instances : -1;
+}
+
+// End a disjoint counter inside the same pass that owns its submitted triangles.
+void RenderingDevice::_end_primitive_query() {
+	if (draw_list.primitive_query_index < 0) {
+		return;
+	}
+	draw_graph.add_draw_list_primitive_query(frames[frame].primitive_pool, draw_list.primitive_query_index, false);
+	draw_list.primitive_query_index = -1;
+}
+
+// Group neighboring triangle draws by owner, without sorting or changing their state.
+void RenderingDevice::_prepare_primitive_query() {
+	if (!draw_list.state.triangle_topology) {
+		_end_primitive_query();
+		return;
+	}
+	const String &name = draw_list.primitive_profile_name.is_empty() ? draw_statistics_category : draw_list.primitive_profile_name;
+	if (draw_list.primitive_query_index >= 0 && draw_list.primitive_active_name == name) {
+		return;
+	}
+	_end_primitive_query();
+	Frame &current = frames[frame];
+	if (!current.primitive_complete || !current.primitive_pool) {
+		return;
+	}
+	if (current.primitive_count >= MAX_PRIMITIVE_QUERY_SCOPES) {
+		current.primitive_complete = false;
+		return;
+	}
+	uint32_t index = current.primitive_count++;
+	current.primitive_names[index] = name;
+	current.primitive_instance_divisors[index] = 0;
+	draw_list.primitive_query_index = index;
+	draw_list.primitive_active_name = name;
+	draw_graph.add_draw_list_primitive_query(current.primitive_pool, index, true);
+}
+
+// Reserves a complete pair before recording, so query exhaustion cannot publish partial scopes.
+bool RenderingDevice::draw_list_begin_profile(const String &p_name) {
+	ERR_RENDER_THREAD_GUARD_V(false);
+	ERR_FAIL_COND_V(!draw_list.active || draw_list.profile_end_index >= 0, false);
+	_end_primitive_query();
+	draw_list.primitive_profile_name = p_name;
+	// Keep 64 slots for viewport/compute markers after detailed scene profiling.
+	if (frames[frame].timestamp_count + 66 > max_timestamp_query_elements) {
+		return false;
+	}
+	uint32_t begin_index = frames[frame].timestamp_count;
+	frames[frame].timestamp_count += 2;
+	draw_list.profile_end_index = begin_index + 1;
+	frames[frame].timestamp_names[begin_index] = p_name + " begin";
+	frames[frame].timestamp_names[begin_index + 1] = p_name + " end";
+	frames[frame].timestamp_cpu_values[begin_index] = OS::get_singleton()->get_ticks_usec();
+	draw_graph.add_draw_list_capture_timestamp(frames[frame].timestamp_pool, begin_index);
+	return true;
+}
+
+// Writes the matching marker to the same draw stream; completed-frame queries own readback.
+void RenderingDevice::draw_list_end_profile() {
+	_end_primitive_query();
+	draw_list.primitive_profile_name = String();
+	if (draw_list.profile_end_index < 0) {
+		return;
+	}
+	frames[frame].timestamp_cpu_values[draw_list.profile_end_index] = OS::get_singleton()->get_ticks_usec();
+	draw_graph.add_draw_list_capture_timestamp(frames[frame].timestamp_pool, draw_list.profile_end_index);
+	draw_list.profile_end_index = -1;
+}
+
 void RenderingDevice::draw_list_end() {
 	ERR_RENDER_THREAD_GUARD();
 
 	ERR_FAIL_COND_MSG(!draw_list.active, "Immediate draw list is already inactive.");
 
+	draw_list_end_profile();
 	draw_graph.add_draw_list_end();
 
 	_draw_list_end();
@@ -7871,18 +7984,21 @@ RenderingDevice::DriverWorkarounds RenderingDevice::get_driver_workarounds() con
 }
 
 void RenderingDevice::swap_buffers(bool p_present) {
+	FrameCPUProfile::Scope cpu_phase("Render command finalization");
 	ERR_RENDER_THREAD_GUARD();
 
 	GodotProfileZoneGroupedFirst(_profile_zone, "_end_frame");
 	_end_frame();
 
 	GodotProfileZoneGrouped(_profile_zone, "_execute_frame");
+	cpu_phase.next("Render submission / present");
 	_execute_frame(p_present);
 
 	// Advance to the next frame and begin recording again.
 	frame = (frame + 1) % frames.size();
 
 	GodotProfileZoneGrouped(_profile_zone, "_begin_frame");
+	cpu_phase.next("Render frame preparation");
 	_begin_frame(true);
 }
 
@@ -8047,7 +8163,10 @@ uint64_t RenderingDevice::get_memory_usage(MemoryType p_type) const {
 void RenderingDevice::_begin_frame(bool p_presented) {
 	GodotProfileZoneGroupedFirst(_profile_zone, "_stall_for_frame");
 	// Before writing to this frame, wait for it to be finished.
-	_stall_for_frame(frame);
+	{
+		FrameCPUProfile::Scope cpu_wait("GPU completion / readbacks");
+		_stall_for_frame(frame);
+	}
 
 	if (command_pool_reset_enabled) {
 		GodotProfileZoneGrouped(_profile_zone, "driver->command_pool_reset");
@@ -8093,6 +8212,8 @@ void RenderingDevice::_begin_frame(bool p_presented) {
 		SWAP(frames[frame].timestamp_cpu_values, frames[frame].timestamp_cpu_result_values);
 	}
 
+	_begin_draw_statistics_frame();
+	frames[frame].timestamp_result_frame = frames[frame].index;
 	frames[frame].timestamp_result_count = frames[frame].timestamp_count;
 	frames[frame].timestamp_count = 0;
 	frames[frame].index = Engine::get_singleton()->get_frames_drawn();
@@ -8119,7 +8240,10 @@ void RenderingDevice::_end_frame() {
 	_submit_transfer_barriers(command_buffer);
 
 	GodotProfileZoneGrouped(_profile_zone, "draw_graph.end");
-	draw_graph.end(RENDER_GRAPH_REORDER == 1, RENDER_GRAPH_FULL_BARRIERS == 1, command_buffer, frames[frame].command_buffer_pool);
+	{
+		FrameCPUProfile::Scope cpu_record("Command graph recording");
+		draw_graph.end(RENDER_GRAPH_REORDER == 1, RENDER_GRAPH_FULL_BARRIERS == 1, command_buffer, frames[frame].command_buffer_pool);
+	}
 	GodotProfileZoneGrouped(_profile_zone, "driver->command_buffer_end");
 	driver->command_buffer_end(command_buffer);
 	GodotProfileZoneGrouped(_profile_zone, "driver->end_segment");
@@ -8211,11 +8335,15 @@ void RenderingDevice::_execute_frame(bool p_present) {
 }
 
 void RenderingDevice::_stall_for_frame(uint32_t p_frame) {
+	FrameCPUProfile::Scope cpu_readbacks("GPU readback callbacks");
 	thread_local PackedByteArray packed_byte_array;
 
 	if (frames[p_frame].fence_signaled) {
 		GodotProfileZoneGroupedFirst(_profile_zone, "driver->fence_wait");
-		driver->fence_wait(frames[p_frame].fence);
+		{
+			FrameCPUProfile::Scope cpu_wait("GPU fence wait");
+			driver->fence_wait(frames[p_frame].fence);
+		}
 		frames[p_frame].fence_signaled = false;
 
 		// Flush any pending requests for asynchronous buffer downloads.
@@ -8507,6 +8635,9 @@ Error RenderingDevice::initialize(RenderingContextDriver *p_context, DisplayServ
 			if (frames[i].timestamp_pool) {
 				driver->timestamp_query_pool_free(frames[i].timestamp_pool);
 			}
+			if (frames[i].primitive_pool) {
+				driver->timestamp_query_pool_free(frames[i].primitive_pool);
+			}
 			for (uint32_t j = 0; j < frames[i].transfer_worker_semaphores.size(); j++) {
 				if (frames[i].transfer_worker_semaphores[j]) {
 					driver->semaphore_free(frames[i].transfer_worker_semaphores[j]);
@@ -8695,6 +8826,111 @@ void RenderingDevice::_free_rids(T &p_owner, const char *p_type) {
 	}
 }
 
+// Enable diagnostics lazily; ordinary rendering retains no query/collection work.
+void RenderingDevice::set_draw_statistics_enabled(bool p_enabled) {
+	ERR_RENDER_THREAD_GUARD();
+	ERR_FAIL_COND(draw_list.active);
+	if (draw_statistics_enabled == p_enabled) {
+		return;
+	}
+	if (p_enabled && !draw_statistics_initialized) {
+		draw_statistics_initialized = true;
+		for (uint32_t i = 0; i < frames.size(); i++) {
+			frames[i].primitive_pool = driver->primitive_query_pool_create(MAX_PRIMITIVE_QUERY_SCOPES);
+			if (!frames[i].primitive_pool) {
+				break;
+			}
+		}
+		draw_statistics_supported = true;
+		for (uint32_t i = 0; i < frames.size(); i++) {
+			draw_statistics_supported = draw_statistics_supported && bool(frames[i].primitive_pool);
+		}
+		// Publish support atomically; no reset may reference a partially created pool set.
+		for (uint32_t i = 0; i < frames.size(); i++) {
+			if (draw_statistics_supported) {
+				frames[i].primitive_names.resize(MAX_PRIMITIVE_QUERY_SCOPES);
+				frames[i].primitive_values.resize(MAX_PRIMITIVE_QUERY_SCOPES);
+				frames[i].primitive_instance_divisors.resize(MAX_PRIMITIVE_QUERY_SCOPES);
+				driver->command_timestamp_query_pool_reset(frames[frame].command_buffer, frames[i].primitive_pool, MAX_PRIMITIVE_QUERY_SCOPES);
+			} else if (frames[i].primitive_pool) {
+				driver->timestamp_query_pool_free(frames[i].primitive_pool);
+				frames[i].primitive_pool = RDD::QueryPoolID();
+			}
+		}
+	}
+	draw_statistics_enabled = p_enabled;
+	draw_statistics_capture = false;
+	draw_statistics_frame = 0;
+	latest_draw_statistics.clear();
+}
+
+// Publish only complete GPU results; disabling profiling skips even the result read.
+void RenderingDevice::_begin_draw_statistics_frame() {
+	Frame &completed = frames[frame];
+	// A disabled profiler with no in-flight work performs no allocation or collection.
+	if (!draw_statistics_enabled && completed.primitive_count == 0) {
+		draw_statistics_capture = false;
+		return;
+	}
+	if (completed.primitive_pool && completed.primitive_count > 0) {
+		if (draw_statistics_enabled) {
+			Dictionary snapshot;
+			snapshot["frame"] = int64_t(completed.index);
+			snapshot["complete"] = completed.primitive_complete;
+			if (completed.primitive_complete) {
+				driver->timestamp_query_pool_get_results(completed.primitive_pool, completed.primitive_count, completed.primitive_values.ptr());
+				Dictionary categories;
+				Dictionary instances = completed.instance_counts.duplicate();
+				uint64_t total = 0;
+				for (uint32_t i = 0; i < completed.primitive_count; i++) {
+					const String &name = completed.primitive_names[i];
+					uint64_t value = completed.primitive_values[i];
+					categories[name] = int64_t(uint64_t(categories.get(name, 0)) + value);
+					total += value;
+					const uint32_t divisor = completed.primitive_instance_divisors[i];
+					if (divisor > 0 && int64_t(instances.get(name, 0)) >= 0) {
+						// The caller guarantees fixed primitive count per instance. Never round a broken contract.
+						instances[name] = value % divisor == 0 ? int64_t(instances.get(name, 0)) + int64_t(value / divisor) : -1;
+					}
+				}
+				snapshot["triangles"] = int64_t(total);
+				snapshot["categories"] = categories;
+				snapshot["batch_categories"] = completed.batch_counts;
+				snapshot["instance_categories"] = instances;
+				int64_t total_batches = 0;
+				int64_t total_instances = 0;
+				for (const Variant &key : completed.batch_counts.keys()) {
+					total_batches += int64_t(completed.batch_counts[key]);
+					const int64_t count = instances.get(key, -1);
+					total_instances = total_instances >= 0 && count >= 0 ? total_instances + count : -1;
+				}
+				snapshot["batches"] = total_batches;
+				snapshot["instances"] = total_instances;
+			}
+			latest_draw_statistics = snapshot;
+		}
+		// Retire prior in-flight work without adding a wait or new capture.
+		driver->command_timestamp_query_pool_reset(completed.command_buffer, completed.primitive_pool, completed.primitive_count);
+	}
+	completed.primitive_count = 0;
+	completed.batch_counts = Dictionary();
+	completed.instance_counts = Dictionary();
+	completed.primitive_complete = true;
+	draw_statistics_capture = draw_statistics_enabled && is_draw_statistics_supported() && ((draw_statistics_frame++ % 4) == 0);
+	if (draw_statistics_capture) {
+		draw_statistics_category = "Other stages";
+	}
+}
+
+// Return a copy so consumers cannot mutate the renderer's completed-frame owner.
+Dictionary RenderingDevice::get_draw_statistics() const {
+	ERR_RENDER_THREAD_GUARD_V(Dictionary());
+	Dictionary snapshot = latest_draw_statistics.duplicate(true);
+	snapshot["supported"] = is_draw_statistics_supported();
+	snapshot["enabled"] = draw_statistics_enabled;
+	return snapshot;
+}
+
 void RenderingDevice::capture_timestamp(const String &p_name) {
 	ERR_RENDER_THREAD_GUARD();
 
@@ -8703,6 +8939,9 @@ void RenderingDevice::capture_timestamp(const String &p_name) {
 	ERR_FAIL_COND_MSG(raytracing_list.active && raytracing_list.state.trace_count > 0, "Capturing timestamps during raytracing list creation is not allowed. Offending timestamp was: " + p_name);
 	ERR_FAIL_COND_MSG(frames[frame].timestamp_count >= max_timestamp_query_elements, vformat("Tried capturing more timestamps than the configured maximum (%d). You can increase this limit in the project settings under 'Debug/Settings' called 'Max Timestamp Query Elements'.", max_timestamp_query_elements));
 
+	if (unlikely(draw_statistics_capture) && !p_name.begins_with("<") && !p_name.begins_with(">") && p_name != "Frame Begin" && p_name != "Pipeline profile sample") {
+		draw_statistics_category = p_name;
+	}
 	draw_graph.add_capture_timestamp(frames[frame].timestamp_pool, frames[frame].timestamp_count);
 
 	frames[frame].timestamp_names[frames[frame].timestamp_count] = p_name;
@@ -8833,7 +9072,7 @@ uint32_t RenderingDevice::get_captured_timestamps_count() const {
 
 uint64_t RenderingDevice::get_captured_timestamps_frame() const {
 	ERR_RENDER_THREAD_GUARD_V(0);
-	return frames[frame].index;
+	return frames[frame].timestamp_result_frame;
 }
 
 uint64_t RenderingDevice::get_captured_timestamp_gpu_time(uint32_t p_index) const {
@@ -8933,6 +9172,9 @@ void RenderingDevice::finalize() {
 		_free_pending_resources(f);
 		driver->command_pool_free(frames[i].command_pool);
 		driver->timestamp_query_pool_free(frames[i].timestamp_pool);
+		if (frames[i].primitive_pool) {
+			driver->timestamp_query_pool_free(frames[i].primitive_pool);
+		}
 		driver->semaphore_free(frames[i].semaphore);
 		driver->fence_free(frames[i].fence);
 
@@ -9158,7 +9400,7 @@ void RenderingDevice::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("draw_list_set_push_constant", "draw_list", "buffer", "size_bytes"), &RenderingDevice::_draw_list_set_push_constant);
 
 	ClassDB::bind_method(D_METHOD("draw_list_draw", "draw_list", "use_indices", "instances", "procedural_vertex_count"), &RenderingDevice::draw_list_draw, DEFVAL(0));
-	ClassDB::bind_method(D_METHOD("draw_list_draw_indirect", "draw_list", "use_indices", "buffer", "offset", "draw_count", "stride"), &RenderingDevice::draw_list_draw_indirect, DEFVAL(0), DEFVAL(1), DEFVAL(0));
+	ClassDB::bind_method(D_METHOD("draw_list_draw_indirect", "draw_list", "use_indices", "buffer", "offset", "draw_count", "stride", "profile_primitives_per_instance"), &RenderingDevice::draw_list_draw_indirect, DEFVAL(0), DEFVAL(1), DEFVAL(0), DEFVAL(0));
 
 	ClassDB::bind_method(D_METHOD("draw_list_enable_scissor", "draw_list", "rect"), &RenderingDevice::draw_list_enable_scissor, DEFVAL(Rect2()));
 	ClassDB::bind_method(D_METHOD("draw_list_disable_scissor", "draw_list"), &RenderingDevice::draw_list_disable_scissor);
@@ -9189,6 +9431,7 @@ void RenderingDevice::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("free_rid", "rid"), &RenderingDevice::free_rid);
 
 	ClassDB::bind_method(D_METHOD("capture_timestamp", "name"), &RenderingDevice::capture_timestamp);
+	ClassDB::bind_method(D_METHOD("get_draw_statistics"), &RenderingDevice::get_draw_statistics);
 	ClassDB::bind_method(D_METHOD("get_captured_timestamps_count"), &RenderingDevice::get_captured_timestamps_count);
 	ClassDB::bind_method(D_METHOD("get_captured_timestamps_frame"), &RenderingDevice::get_captured_timestamps_frame);
 	ClassDB::bind_method(D_METHOD("get_captured_timestamp_gpu_time", "index"), &RenderingDevice::get_captured_timestamp_gpu_time);

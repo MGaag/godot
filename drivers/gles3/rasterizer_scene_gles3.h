@@ -108,8 +108,9 @@ struct RenderDataGLES3 {
 	bool cam_orthogonal = false;
 	uint32_t camera_visible_layers = 0xFFFFFFFF;
 
-	// For billboards to cast correct shadows.
+	// Billboard orientation and LOD use the viewing camera, not the light projection.
 	Transform3D main_cam_transform;
+	bool main_cam_orthogonal = false; // Orthographic viewing distance does not reduce shadow-caster detail.
 
 	// For stereo rendering
 	uint32_t view_count = 1;
@@ -241,9 +242,19 @@ private:
 		float fade_to;
 		uint32_t blend_splits; // Not exposed to the shader.
 		uint32_t pad;
+		float history_matrices[4][16]; // Current-view receiver to the previous atlas.
+		float history_rects[4][4]; // Prior cascade rectangle minima and maxima.
+		float history_bias[4]; // Prior world normal offsets.
+		float history_direction[3]; // Previous light direction in the current view.
+		float history_weight; // Zero rejects unavailable or stale history.
+		float depth_decode[4][4]; // Current/prior atlas depths to comparable world light-axis metres.
+		float history_camera_depth[4]; // Current view receiver to previous camera depth.
+		float history_splits[4]; // Previous camera cascade split depths.
+		float history_depth_tolerance[4]; // One current/prior texel footprint in world metres.
 	};
 	static_assert(sizeof(DirectionalShadowData) % 16 == 0, "DirectionalShadowData size must be a multiple of 16 bytes");
 
+	GLuint shadow_history_raw_sampler = 0; // Non-comparison nearest reads without mutating atlas texture state.
 	class GeometryInstanceGLES3;
 
 	// Cached data for drawing surfaces
@@ -744,8 +755,10 @@ private:
 	void _setup_lights(const RenderDataGLES3 *p_render_data, bool p_using_shadows, uint32_t &r_directional_light_count, uint32_t &r_omni_light_count, uint32_t &r_spot_light_count, uint32_t &r_area_light_count, uint32_t &r_directional_shadow_count);
 	void _setup_environment(const RenderDataGLES3 *p_render_data, bool p_no_fog, const Size2i &p_screen_size, bool p_flip_y, const Color &p_default_bg_color, bool p_pancake_shadows, float p_shadow_bias = 0.0);
 	void _fill_render_list(RenderListType p_render_list, const RenderDataGLES3 *p_render_data, PassMode p_pass_mode, bool p_append = false);
+	// Preserve this view's current directional capture for its next rendered frame.
+	void _capture_shadow_history(const RenderDataGLES3 *p_render_data);
 	void _render_shadows(const RenderDataGLES3 *p_render_data, const Size2i &p_viewport_size = Size2i(1, 1));
-	void _render_shadow_pass(RID p_light, RID p_shadow_atlas, int p_pass, const PagedArray<RenderGeometryInstance *> &p_instances, float p_lod_distance_multiplier = 0, float p_screen_mesh_lod_threshold = 0.0, RenderingServerTypes::RenderInfo *p_render_info = nullptr, const Size2i &p_viewport_size = Size2i(1, 1), const Transform3D &p_main_cam_transform = Transform3D());
+	void _render_shadow_pass(RID p_light, RID p_shadow_atlas, int p_pass, const PagedArray<RenderGeometryInstance *> &p_instances, float p_lod_distance_multiplier = 0, float p_screen_mesh_lod_threshold = 0.0, RenderingServerTypes::RenderInfo *p_render_info = nullptr, const Size2i &p_viewport_size = Size2i(1, 1), const Transform3D &p_main_cam_transform = Transform3D(), bool p_main_cam_orthogonal = false);
 	void _render_post_processing(const RenderDataGLES3 *p_render_data);
 
 	template <PassMode p_pass_mode>

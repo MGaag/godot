@@ -802,6 +802,7 @@ void SceneShaderForwardClustered::init(const String p_defines) {
 		actions.renames["NORMAL_MAP_DEPTH"] = "normal_map_depth";
 		actions.renames["BENT_NORMAL_MAP"] = "bent_normal_map";
 		actions.renames["BENT_CONE_APERTURE"] = "bent_cone_aperture";
+		actions.renames["BENT_CONE_WEIGHT"] = "bent_cone_weight";
 		actions.renames["ALBEDO"] = "albedo_highp";
 		actions.renames["DISPLACEMENT"] = "displacement_highp";
 		actions.renames["ALPHA"] = "alpha_highp";
@@ -837,6 +838,7 @@ void SceneShaderForwardClustered::init(const String p_defines) {
 		actions.renames["CUSTOM2"] = "custom2_attrib";
 		actions.renames["CUSTOM3"] = "custom3_attrib";
 		actions.renames["LIGHT_VERTEX"] = "light_vertex";
+		actions.renames["DIRECTIONAL_SHADOW_FADE_DISTANCE"] = "directional_shadow_fade_distance";
 
 		actions.renames["NODE_POSITION_WORLD"] = "read_model_matrix[3].xyz";
 		actions.renames["CAMERA_POSITION_WORLD"] = "inv_view_matrix[3].xyz";
@@ -860,6 +862,7 @@ void SceneShaderForwardClustered::init(const String p_defines) {
 		actions.renames["LIGHT_AREA_SPECULAR_MULTIPLIER"] = "area_specular";
 		actions.renames["LIGHT"] = "light_highp";
 		actions.renames["ATTENUATION"] = "attenuation_highp";
+		actions.renames["WIDE_DIRECTIONAL_SHADOW"] = "attenuation_highp";
 		actions.renames["DIFFUSE_LIGHT"] = "diffuse_light_highp";
 		actions.renames["SPECULAR_LIGHT"] = "specular_light_highp";
 
@@ -889,6 +892,7 @@ void SceneShaderForwardClustered::init(const String p_defines) {
 		actions.usage_defines["INSTANCE_CUSTOM"] = "#define ENABLE_INSTANCE_CUSTOM\n";
 		actions.usage_defines["POSITION"] = "#define OVERRIDE_POSITION\n";
 		actions.usage_defines["LIGHT_VERTEX"] = "#define LIGHT_VERTEX_USED\n";
+		actions.usage_defines["DIRECTIONAL_SHADOW_FADE_DISTANCE"] = "#define DIRECTIONAL_SHADOW_FADE_USED\n";
 		actions.usage_defines["Z_CLIP_SCALE"] = "#define Z_CLIP_SCALE_USED\n";
 		actions.usage_defines["LIGHT_AREA_DIFFUSE_MULTIPLIER"] = "#define AREA_LIGHT_CODE_USED\n";
 		actions.usage_defines["LIGHT_AREA_SPECULAR_MULTIPLIER"] = "@LIGHT_AREA_DIFFUSE_MULTIPLIER";

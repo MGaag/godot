@@ -29,6 +29,7 @@
 /**************************************************************************/
 
 #include "performance.h"
+#include "frame_cpu_profile.h"
 #include "performance.compat.inc"
 
 #include "core/config/engine.h"
@@ -59,6 +60,10 @@
 Performance *Performance::singleton = nullptr;
 
 void Performance::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("set_cpu_frame_profiling_enabled", "enabled"), &Performance::set_cpu_frame_profiling_enabled);
+	ClassDB::bind_method(D_METHOD("take_cpu_frame_profile"), &Performance::take_cpu_frame_profile);
+	ClassDB::bind_method(D_METHOD("begin_cpu_frame_scope", "name"), &Performance::begin_cpu_frame_scope);
+	ClassDB::bind_method(D_METHOD("end_cpu_frame_scope", "generation"), &Performance::end_cpu_frame_scope);
 	ClassDB::bind_method(D_METHOD("get_monitor", "monitor"), &Performance::get_monitor);
 	ClassDB::bind_method(D_METHOD("add_custom_monitor", "id", "callable", "arguments", "type"), &Performance::add_custom_monitor, DEFVAL(Array()), DEFVAL(MONITOR_TYPE_QUANTITY));
 	ClassDB::bind_method(D_METHOD("remove_custom_monitor", "id"), &Performance::remove_custom_monitor);
@@ -636,4 +641,18 @@ Variant Performance::MonitorCall::call(bool &r_error, String &r_error_message) {
 		r_error_message = Variant::get_callable_error_text(_callable, args, argc, error);
 	}
 	return return_value;
+}
+
+
+void Performance::set_cpu_frame_profiling_enabled(bool p_enabled) {
+	FrameCPUProfile::set_enabled(p_enabled);
+}
+Dictionary Performance::take_cpu_frame_profile() {
+	return FrameCPUProfile::take();
+}
+int64_t Performance::begin_cpu_frame_scope(const String &p_name) {
+	return FrameCPUProfile::push(p_name);
+}
+void Performance::end_cpu_frame_scope(int64_t p_generation) {
+	FrameCPUProfile::pop(p_generation);
 }

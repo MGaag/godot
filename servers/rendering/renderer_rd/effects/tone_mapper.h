@@ -30,6 +30,8 @@
 
 #pragma once
 
+#include "gt7_lut.h"
+
 #include "servers/rendering/renderer_rd/pipeline_cache_rd.h"
 #include "servers/rendering/renderer_rd/shaders/effects/tonemap.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/effects/tonemap_mobile.glsl.gen.h"
@@ -38,6 +40,7 @@ namespace RendererRD {
 
 class ToneMapper {
 private:
+	GT7LUT *gt7_lut = nullptr; // Lazily baked lookup, retained across views and exposure changes.
 	bool using_mobile_version = false;
 	enum TonemapMode {
 		TONEMAP_MODE_NORMAL,
@@ -98,7 +101,8 @@ private:
 		TONEMAP_MOBILE_FLAG_GLOW_MODE_SOFTLIGHT = (1 << 15),
 		TONEMAP_MOBILE_FLAG_GLOW_MODE_REPLACE = (1 << 16),
 		TONEMAP_MOBILE_FLAG_GLOW_MODE_MIX = (1 << 17),
-		TONEMAP_MOBILE_ADRENO_BUG = (1 << 18), // Needs to be last so we force the pipeline cache to specify specializations for all variants.
+		TONEMAP_MOBILE_FLAG_TONEMAPPER_GT7 = (1 << 18),
+		TONEMAP_MOBILE_ADRENO_BUG = (1 << 19), // Needs to be last so we force the pipeline cache to specify specializations for all variants.
 	};
 
 	struct TonemapPushConstant {
@@ -160,6 +164,9 @@ private:
 	} tonemap_mobile;
 
 public:
+	// Prepares one-time lookup resources before any scene draw list is open.
+	void prepare(RSE::EnvironmentToneMapper p_mode);
+
 	ToneMapper(bool p_use_mobile_version);
 	~ToneMapper();
 

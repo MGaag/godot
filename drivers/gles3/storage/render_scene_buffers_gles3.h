@@ -52,6 +52,25 @@ public:
 	bool apply_environment_effects_in_post = false;
 	bool apply_canvas_bg_exposure = false;
 
+	// Disposable prior directional atlas, owned by this view. Metadata is world-space.
+	struct ShadowHistory {
+		GLuint depth = 0; // One prior raw shadow capture, never recursively filtered.
+		GLuint fbo = 0; // Depth-copy destination.
+		int size = 0; // Atlas allocation dimension; zero means no allocation.
+		uint64_t frame = 0; // Last completed capture frame.
+		RID light; // Only the same directional light may consume this capture.
+		RID environment; // Scene/environment replacement invalidates the capture.
+		Transform3D camera; // Prior camera, for cut rejection.
+		Vector3 direction; // World-space sun direction, for lighting-change rejection.
+		Projection matrices[4]; // World receiver to captured atlas projection.
+		Rect2 rects[4]; // Captured cascade bounds, excluding invalid border reuse.
+		float bias[4] = {}; // Captured normal offsets in world units.
+		float splits[4] = {}; // Captured camera-depth cascade selection.
+		int cascades = 0; // Actual cascade count in the saved layout.
+	} shadow_history;
+
+	// Release atlas history on resize, reconfiguration and view destruction.
+	void clear_shadow_history();
 	RID render_target;
 
 	// Color format details from our render target

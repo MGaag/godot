@@ -41,6 +41,8 @@
 #include "servers/rendering/shader_language.h"
 #include "servers/rendering/shader_warnings.h"
 
+// Defines rendering APIs and bindings; diagnostic labels and opt-in pipeline sampling preserve normal rendering state. RenderingServerDefault queues mutations to their owners.
+
 RenderingServer *RenderingServer::singleton = nullptr;
 RenderingServer *(*RenderingServer::create_func)() = nullptr;
 
@@ -2478,6 +2480,7 @@ void RenderingServer::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("multimesh_allocate_data", "multimesh", "instances", "transform_format", "color_format", "custom_data_format", "use_indirect"), &RenderingServer::multimesh_allocate_data, DEFVAL(false), DEFVAL(false), DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("multimesh_get_instance_count", "multimesh"), &RenderingServer::multimesh_get_instance_count);
 	ClassDB::bind_method(D_METHOD("multimesh_set_mesh", "multimesh", "mesh"), &RenderingServer::multimesh_set_mesh);
+	ClassDB::bind_method(D_METHOD("multimesh_set_mesh_lod", "multimesh", "lod"), &RenderingServer::multimesh_set_mesh_lod);
 	ClassDB::bind_method(D_METHOD("multimesh_instance_set_transform", "multimesh", "index", "transform"), &RenderingServer::multimesh_instance_set_transform);
 	ClassDB::bind_method(D_METHOD("multimesh_instance_set_transform_2d", "multimesh", "index", "transform"), &RenderingServer::multimesh_instance_set_transform_2d);
 	ClassDB::bind_method(D_METHOD("multimesh_instance_set_color", "multimesh", "index", "color"), &RenderingServer::multimesh_instance_set_color);
@@ -2888,6 +2891,8 @@ void RenderingServer::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("viewport_set_update_mode", "viewport", "update_mode"), &RenderingServer::viewport_set_update_mode);
 	ClassDB::bind_method(D_METHOD("viewport_get_update_mode", "viewport"), &RenderingServer::viewport_get_update_mode);
 	ClassDB::bind_method(D_METHOD("viewport_set_clear_mode", "viewport", "clear_mode"), &RenderingServer::viewport_set_clear_mode);
+	ClassDB::bind_method(D_METHOD("viewport_set_pre_draw_callback", "viewport", "callback"), &RenderingServer::viewport_set_pre_draw_callback);
+	ClassDB::bind_method(D_METHOD("viewport_set_post_draw_callback", "viewport", "callback"), &RenderingServer::viewport_set_post_draw_callback);
 	ClassDB::bind_method(D_METHOD("viewport_get_render_target", "viewport"), &RenderingServer::viewport_get_render_target);
 	ClassDB::bind_method(D_METHOD("viewport_get_texture", "viewport"), &RenderingServer::viewport_get_texture);
 	ClassDB::bind_method(D_METHOD("viewport_set_disable_3d", "viewport", "disable"), &RenderingServer::viewport_set_disable_3d);
@@ -3046,6 +3051,7 @@ void RenderingServer::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("sky_set_mode", "sky", "mode"), &RenderingServer::sky_set_mode);
 	ClassDB::bind_method(D_METHOD("sky_set_material", "sky", "material"), &RenderingServer::sky_set_material);
 	ClassDB::bind_method(D_METHOD("sky_bake_panorama", "sky", "energy", "bake_irradiance", "size"), &RenderingServer::sky_bake_panorama);
+	ClassDB::bind_method(D_METHOD("sky_get_cosine_cone_texture_rd", "sky"), &RenderingServer::sky_get_cosine_cone_texture_rd);
 
 	BIND_ENUM_CONSTANT(RSE::SKY_MODE_AUTOMATIC);
 	BIND_ENUM_CONSTANT(RSE::SKY_MODE_QUALITY);
@@ -3151,6 +3157,7 @@ void RenderingServer::_bind_methods() {
 	BIND_ENUM_CONSTANT(RSE::ENV_TONE_MAPPER_FILMIC);
 	BIND_ENUM_CONSTANT(RSE::ENV_TONE_MAPPER_ACES);
 	BIND_ENUM_CONSTANT(RSE::ENV_TONE_MAPPER_AGX);
+	BIND_ENUM_CONSTANT(RSE::ENV_TONE_MAPPER_GT7);
 
 	BIND_ENUM_CONSTANT(RSE::ENV_SSR_ROUGHNESS_QUALITY_DISABLED);
 	BIND_ENUM_CONSTANT(RSE::ENV_SSR_ROUGHNESS_QUALITY_LOW);
@@ -3225,6 +3232,8 @@ void RenderingServer::_bind_methods() {
 	/* SCENARIO */
 
 	ClassDB::bind_method(D_METHOD("scenario_create"), &RenderingServer::scenario_create);
+	ClassDB::bind_method(D_METHOD("scenario_set_shadow_receiver_height_range", "scenario", "height_range"), &RenderingServer::scenario_set_shadow_receiver_height_range);
+	ClassDB::bind_method(D_METHOD("scenario_set_shadow_caster_query", "scenario", "camera_query", "padding"), &RenderingServer::scenario_set_shadow_caster_query);
 	ClassDB::bind_method(D_METHOD("scenario_set_environment", "scenario", "environment"), &RenderingServer::scenario_set_environment);
 	ClassDB::bind_method(D_METHOD("scenario_set_fallback_environment", "scenario", "environment"), &RenderingServer::scenario_set_fallback_environment);
 	ClassDB::bind_method(D_METHOD("scenario_set_camera_attributes", "scenario", "effects"), &RenderingServer::scenario_set_camera_attributes);
@@ -3253,6 +3262,9 @@ void RenderingServer::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("instance_set_extra_visibility_margin", "instance", "margin"), &RenderingServer::instance_set_extra_visibility_margin);
 	ClassDB::bind_method(D_METHOD("instance_set_visibility_parent", "instance", "parent"), &RenderingServer::instance_set_visibility_parent);
 	ClassDB::bind_method(D_METHOD("instance_set_ignore_culling", "instance", "enabled"), &RenderingServer::instance_set_ignore_culling);
+	ClassDB::bind_method(D_METHOD("instance_set_profile_label", "instance", "label"), &RenderingServer::instance_set_profile_label);
+	ClassDB::bind_method(D_METHOD("instance_set_gpu_placement_culling", "instance", "positions", "visible_multimesh", "origin_tile_height", "radius", "center_height"), &RenderingServer::instance_set_gpu_placement_culling, DEFVAL(0.0f));
+	ClassDB::bind_method(D_METHOD("set_pipeline_profiling_enabled", "enabled"), &RenderingServer::set_pipeline_profiling_enabled);
 
 	ClassDB::bind_method(D_METHOD("instance_geometry_set_flag", "instance", "flag", "enabled"), &RenderingServer::instance_geometry_set_flag);
 	ClassDB::bind_method(D_METHOD("instance_geometry_set_cast_shadows_setting", "instance", "shadow_casting_setting"), &RenderingServer::instance_geometry_set_cast_shadows_setting);
@@ -3342,6 +3354,7 @@ void RenderingServer::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("canvas_item_set_visible", "item", "visible"), &RenderingServer::canvas_item_set_visible);
 	ClassDB::bind_method(D_METHOD("canvas_item_set_light_mask", "item", "mask"), &RenderingServer::canvas_item_set_light_mask);
 	ClassDB::bind_method(D_METHOD("canvas_item_set_visibility_layer", "item", "visibility_layer"), &RenderingServer::canvas_item_set_visibility_layer);
+	ClassDB::bind_method(D_METHOD("canvas_item_set_profile_label", "item", "label"), &RenderingServer::canvas_item_set_profile_label);
 	ClassDB::bind_method(D_METHOD("canvas_item_set_transform", "item", "transform"), &RenderingServer::canvas_item_set_transform);
 	ClassDB::bind_method(D_METHOD("canvas_item_set_clip", "item", "clip"), &RenderingServer::canvas_item_set_clip);
 	ClassDB::bind_method(D_METHOD("canvas_item_set_distance_field_mode", "item", "enabled"), &RenderingServer::canvas_item_set_distance_field_mode);
@@ -3698,6 +3711,8 @@ void RenderingServer::init() {
 	GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/lights_and_shadows/directional_shadow/soft_shadow_filter_quality", PROPERTY_HINT_ENUM, "Hard (Fastest),Soft Very Low (Faster),Soft Low (Fast),Soft Medium (Average),Soft High (Slow),Soft Ultra (Slowest)"), 2);
 	GLOBAL_DEF("rendering/lights_and_shadows/directional_shadow/soft_shadow_filter_quality.mobile", 0);
 	GLOBAL_DEF("rendering/lights_and_shadows/directional_shadow/16_bits", true);
+	// The bounded Compatibility history trial remains opt-in pending motion acceptance.
+	GLOBAL_DEF("rendering/lights_and_shadows/directional_shadow/temporal_filter", false);
 
 	GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/lights_and_shadows/positional_shadow/soft_shadow_filter_quality", PROPERTY_HINT_ENUM, "Hard (Fastest),Soft Very Low (Faster),Soft Low (Fast),Soft Medium (Average),Soft High (Slow),Soft Ultra (Slowest)"), 2);
 	GLOBAL_DEF("rendering/lights_and_shadows/positional_shadow/soft_shadow_filter_quality.mobile", 0);
@@ -3718,6 +3733,7 @@ void RenderingServer::init() {
 
 	GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/reflections/sky_reflections/roughness_layers", PROPERTY_HINT_RANGE, "1,32,1"), 8);
 	GLOBAL_DEF_RST("rendering/reflections/sky_reflections/texture_array_reflections", true);
+	GLOBAL_DEF_RST("rendering/reflections/sky_reflections/cosine_cone_filter", false);
 	GLOBAL_DEF("rendering/reflections/sky_reflections/texture_array_reflections.mobile", false);
 	GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/reflections/sky_reflections/ggx_samples", PROPERTY_HINT_RANGE, "0,256,1"), 32);
 	GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/reflections/sky_reflections/ggx_samples.mobile", PROPERTY_HINT_RANGE, "0,128,1"), 16);

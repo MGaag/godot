@@ -1589,6 +1589,11 @@ void MeshStorage::_multimesh_allocate_data(RID p_multimesh, int p_instances, RSE
 		multimesh->uniform_set_3d = RID(); //cleared by dependency
 	}
 
+	if (multimesh->command_buffer.is_valid()) {
+		RD::get_singleton()->free_rid(multimesh->command_buffer);
+		multimesh->command_buffer = RID();
+	}
+
 	if (multimesh->data_cache_dirty_regions) {
 		memdelete_arr(multimesh->data_cache_dirty_regions);
 		multimesh->data_cache_dirty_regions = nullptr;
@@ -1611,6 +1616,9 @@ void MeshStorage::_multimesh_allocate_data(RID p_multimesh, int p_instances, RSE
 	multimesh->buffer_set = false;
 
 	multimesh->indirect = p_use_indirect;
+	if (!p_use_indirect) {
+		multimesh->mesh_lod = 0;
+	}
 	multimesh->command_buffer = RID();
 
 	//print_line("allocate, elements: " + itos(p_instances) + " 2D: " + itos(p_transform_format == RSE::MULTIMESH_TRANSFORM_2D) + " colors " + itos(multimesh->uses_colors) + " data " + itos(multimesh->uses_custom_data) + " stride " + itos(multimesh->stride_cache) + " total size " + itos(multimesh->stride_cache * multimesh->instances));
@@ -1695,6 +1703,34 @@ int MeshStorage::_multimesh_get_instance_count(RID p_multimesh) const {
 	return multimesh->instances;
 }
 
+// Retain the original vertices and imported LOD buffers. Only the geometry
+// word changes; placement publication and visibility own all instance words.
+void MeshStorage::multimesh_set_mesh_lod(RID p_multimesh, int p_lod) {
+	MultiMesh *multimesh = multimesh_owner.get_or_null(p_multimesh);
+	ERR_FAIL_NULL(multimesh);
+	ERR_FAIL_COND(p_lod < -1);
+	ERR_FAIL_COND_MSG(p_lod != 0 && !multimesh->indirect, "Fixed LOD selection requires an indirect MultiMesh.");
+	if (multimesh->mesh_lod == p_lod) {
+		return;
+	}
+	multimesh->mesh_lod = p_lod;
+	Mesh *mesh = mesh_owner.get_or_null(multimesh->mesh);
+	if (mesh && multimesh->command_buffer.is_valid()) {
+		for (uint32_t i = 0; i < mesh->surface_count; i++) {
+			const uint32_t count = mesh_surface_get_vertices_drawn_count(mesh->surfaces[i], multimesh_surface_get_lod(p_multimesh, mesh->surfaces[i]));
+			RD::get_singleton()->buffer_update(multimesh->command_buffer, i * sizeof(uint32_t) * INDIRECT_MULTIMESH_COMMAND_STRIDE, sizeof(count), &count);
+		}
+	}
+	// Draws read the selection directly. No topology, materials or bounds changed.
+}
+
+uint32_t MeshStorage::multimesh_surface_get_lod(RID p_multimesh, void *p_surface) const {
+	const MultiMesh *multimesh = multimesh_owner.get_or_null(p_multimesh);
+	ERR_FAIL_NULL_V(multimesh, 0);
+	const Mesh::Surface *surface = reinterpret_cast<Mesh::Surface *>(p_surface);
+	return multimesh->mesh_lod < 0 ? surface->lod_count : MIN(uint32_t(multimesh->mesh_lod), surface->lod_count);
+}
+
 void MeshStorage::_multimesh_set_mesh(RID p_multimesh, RID p_mesh) {
 	MultiMesh *multimesh = multimesh_owner.get_or_null(p_multimesh);
 	ERR_FAIL_NULL(multimesh);
@@ -1715,7 +1751,9 @@ void MeshStorage::_multimesh_set_mesh(RID p_multimesh, RID p_mesh) {
 			newVector.resize_initialized(sizeof(uint32_t) * INDIRECT_MULTIMESH_COMMAND_STRIDE * mesh->surface_count);
 
 			for (uint32_t i = 0; i < mesh->surface_count; i++) {
-				uint32_t count = mesh_surface_get_vertices_drawn_count(mesh->surfaces[i]);
+				uint32_t count = mesh_surface_get_vertices_drawn_count(mesh->surfaces[i], multimesh_surface_get_lod(p_multimesh, mesh->surfaces[i]));
+				const uint32_t dispatch[3] = { MAX(1u, (uint32_t(multimesh->instances) + 63) / 64), 1, 1 };
+				memcpy(newVector.ptrw() + i * sizeof(uint32_t) * INDIRECT_MULTIMESH_COMMAND_STRIDE + 5 * sizeof(uint32_t), dispatch, sizeof(dispatch));
 				newVector.set(i * sizeof(uint32_t) * INDIRECT_MULTIMESH_COMMAND_STRIDE, static_cast<uint8_t>(count));
 				newVector.set(i * sizeof(uint32_t) * INDIRECT_MULTIMESH_COMMAND_STRIDE + 1, static_cast<uint8_t>(count >> 8));
 				newVector.set(i * sizeof(uint32_t) * INDIRECT_MULTIMESH_COMMAND_STRIDE + 2, static_cast<uint8_t>(count >> 16));

@@ -34,6 +34,7 @@
 #include "servers/rendering/renderer_rd/pipeline_cache_rd.h"
 #include "servers/rendering/renderer_rd/shaders/environment/sky.glsl.gen.h"
 #include "servers/rendering/renderer_rd/storage_rd/material_storage.h"
+#include "sky_cone_filter.h"
 #include "servers/rendering/renderer_scene_render.h"
 #include "servers/rendering/rendering_device.h"
 #include "servers/rendering/rendering_server_types.h"
@@ -69,6 +70,8 @@ public:
 
 private:
 	RD::DataFormat texture_format = RD::DATA_FORMAT_R16G16B16A16_SFLOAT;
+	SkyConeFilterRD sky_cone_filter;
+	bool sky_cone_filter_enabled = false;
 
 	enum SkyTextureSetVersion {
 		SKY_TEXTURE_SET_BACKGROUND,
@@ -212,6 +215,7 @@ public:
 
 		RID radiance_base_octmap;
 		RID downsampled_radiance_octmap;
+		RID cosine_cone_radiance;
 		DownsampleLayer downsampled_layer;
 		RID coefficient_buffer;
 
@@ -335,6 +339,8 @@ public:
 
 	RID sky_get_material(RID p_sky) const;
 	RID sky_get_radiance_texture_rd(RID p_sky) const;
+	// Normalized cosine-convolved sky levels for material visibility cones.
+	RID sky_get_cosine_cone_texture_rd(RID p_sky) const;
 	float sky_get_baked_exposure(RID p_sky) const;
 
 	RID allocate_sky_rid();

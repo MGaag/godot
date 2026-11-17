@@ -89,4 +89,5 @@ struct DirectionalLightData {
 	vec2 uv_scale2;
 	vec2 uv_scale3;
 	vec2 uv_scale4;
+	vec4 shadow_atlas_rects[4];
 };

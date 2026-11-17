@@ -30,11 +30,14 @@
 
 #include "renderer_scene_cull.h"
 
+#include "main/frame_cpu_profile.h"
+
 #include "core/config/engine.h"
 #include "core/config/project_settings.h"
 #include "core/math/geometry_3d.h"
 #include "core/object/callable_mp.h"
 #include "core/object/worker_thread_pool.h"
+#include "servers/rendering/directional_shadow_fit.h"
 #include "servers/rendering/rendering_light_culler.h"
 #include "servers/rendering/rendering_server.h"
 #include "servers/rendering/rendering_server_default.h"
@@ -47,6 +50,8 @@
 //#define DEBUG_CULL_TIME
 #ifdef DEBUG_CULL_TIME
 #include "core/os/os.h"
+
+// Owns scene instances and backend geometry publication; diagnostic labels survive geometry rebuilds without invalidating rendering. Backends own draw timing.
 #endif
 
 /* HALTON SEQUENCE */
@@ -452,6 +457,23 @@ void RendererSceneCull::scenario_initialize(RID p_rid) {
 	RendererSceneOcclusionCull::get_singleton()->add_scenario(p_rid);
 }
 
+// The world supplies one stable envelope; receiver fitting never infers it from resident objects.
+void RendererSceneCull::scenario_set_shadow_receiver_height_range(RID p_scenario, const Vector2 &p_range) {
+	Scenario *scenario = scenario_owner.get_or_null(p_scenario);
+	ERR_FAIL_NULL(scenario);
+	ERR_FAIL_COND_MSG(!p_range.is_finite() || p_range.x > p_range.y, "Shadow receiver heights must be finite and ordered.");
+	scenario->shadow_receiver_height_range = p_range;
+}
+
+// The query is a scene policy; both CPU pages and GPU instances consume it.
+void RendererSceneCull::scenario_set_shadow_caster_query(RID p_scenario, bool p_camera_query, float p_padding) {
+	Scenario *scenario = scenario_owner.get_or_null(p_scenario);
+	ERR_FAIL_NULL(scenario);
+	ERR_FAIL_COND(!Math::is_finite(p_padding) || p_padding < 0.0f);
+	scenario->shadow_camera_query = p_camera_query;
+	scenario->shadow_query_padding = p_padding;
+}
+
 void RendererSceneCull::scenario_set_environment(RID p_scenario, RID p_environment) {
 	Scenario *scenario = scenario_owner.get_or_null(p_scenario);
 	ERR_FAIL_NULL(scenario);
@@ -722,6 +744,8 @@ void RendererSceneCull::instance_set_base(RID p_instance, RID p_base) {
 				InstanceGeometryData *geom = memnew(InstanceGeometryData);
 				instance->base_data = geom;
 				geom->geometry_instance = scene_render->geometry_instance_create(p_base);
+				geom->geometry_instance->profile_label = instance->profile_label;
+				geom->geometry_instance->gpu_placement_culling = instance->gpu_placement_culling;
 
 				ERR_FAIL_NULL(geom->geometry_instance);
 
@@ -1151,6 +1175,36 @@ void RendererSceneCull::instance_set_extra_visibility_margin(RID p_instance, rea
 
 	instance->extra_margin = p_margin;
 	_instance_queue_update(instance, true, false);
+}
+
+// Propagates labels without marking geometry, dependencies, or shadow caches dirty.
+void RendererSceneCull::instance_set_profile_label(RID p_instance, const StringName &p_label) {
+	Instance *instance = instance_owner.get_or_null(p_instance);
+	ERR_FAIL_NULL(instance);
+	instance->profile_label = p_label;
+	if (((1 << instance->base_type) & RSE::INSTANCE_GEOMETRY_MASK) && instance->base_data) {
+		InstanceGeometryData *geom = static_cast<InstanceGeometryData *>(instance->base_data);
+		geom->geometry_instance->profile_label = p_label;
+	}
+}
+
+// Publishes caller-owned placement and scratch buffers to the renderer view.
+void RendererSceneCull::instance_set_gpu_placement_culling(RID p_instance, RID p_positions, RID p_visible_multimesh, const Vector4 &p_origin_tile_height, float p_radius, float p_center_height) {
+	Instance *instance = instance_owner.get_or_null(p_instance);
+	ERR_FAIL_NULL(instance);
+	ERR_FAIL_COND_MSG(!Math::is_finite(p_radius) || !Math::is_finite(p_center_height) || !p_origin_tile_height.is_finite(), "GPU placement culling needs finite bounds and placement parameters.");
+	ERR_FAIL_COND_MSG(p_positions.is_valid() && (p_radius <= 0.0f || p_origin_tile_height.z <= 0.0f || p_origin_tile_height.w <= 0.0f || !p_visible_multimesh.is_valid()), "GPU placement culling needs a positive radius, placement scale, and output buffer.");
+	RenderGeometryInstance::GPUPlacementCulling data;
+	data.positions = p_positions;
+	data.visible_multimesh = p_visible_multimesh;
+	data.origin_tile_height = p_origin_tile_height;
+	data.radius = p_radius;
+	data.center_height = p_center_height;
+	instance->gpu_placement_culling = data;
+	if (((1 << instance->base_type) & RSE::INSTANCE_GEOMETRY_MASK) && instance->base_data) {
+		InstanceGeometryData *geom = static_cast<InstanceGeometryData *>(instance->base_data);
+		geom->geometry_instance->gpu_placement_culling = data;
+	}
 }
 
 void RendererSceneCull::instance_set_ignore_culling(RID p_instance, bool p_enabled) {
@@ -2143,7 +2197,7 @@ void RendererSceneCull::_update_instance_lightmap_captures(Instance *p_instance)
 	geom->geometry_instance->set_lightmap_capture(p_instance->lightmap_sh.ptr());
 }
 
-void RendererSceneCull::_light_instance_setup_directional_shadow(int p_shadow_index, Instance *p_instance, const Transform3D p_cam_transform, const Projection &p_cam_projection, bool p_cam_orthogonal, bool p_cam_vaspect) {
+void RendererSceneCull::_light_instance_setup_directional_shadow(int p_shadow_index, Instance *p_instance, const Transform3D p_cam_transform, const Projection &p_cam_projection, bool p_cam_orthogonal, bool p_cam_vaspect, const Vector<Vector3> &p_receivers, Scenario *p_scenario, uint32_t p_visible_layers) {
 	// For later tight culling, the light culler needs to know the details of the directional light.
 	light_culler->prepare_directional_light(p_instance, p_shadow_index);
 
@@ -2319,6 +2373,44 @@ void RendererSceneCull::_light_instance_setup_directional_shadow(int p_shadow_in
 			y_min_cam = Math::snapped(y_vec.dot(center) - radius - soft_shadow_expand, unit);
 		}
 
+		// A single orthographic map follows visible receivers instead of the empty camera
+		// depth range. Cascaded and perspective cameras retain their established fitting.
+		const bool receiver_fit = p_cam_orthogonal && splits == 1 && !p_receivers.is_empty();
+		if (receiver_fit) {
+			AABB receivers = DirectionalShadowFit::light_bounds(p_receivers, transform.basis);
+			// Retain the existing angular-softness allowance; filtering still needs a guard.
+			receivers.position.x -= soft_shadow_expand;
+			receivers.position.y -= soft_shadow_expand;
+			receivers.size.x += soft_shadow_expand * 2;
+			receivers.size.y += soft_shadow_expand * 2;
+			receivers = DirectionalShadowFit::stabilize(receivers, int(texture_size));
+			x_min_cam = x_min = receivers.position.x;
+			x_max_cam = x_max = receivers.get_end().x;
+			y_min_cam = y_min = receivers.position.y;
+			y_max_cam = y_max = receivers.get_end().y;
+			z_min_cam = z_min = receivers.position.z;
+			z_max = receivers.get_end().z;
+
+			// Extrude through the fixed height envelope, retaining offscreen casters
+			// without changing width, height, or depth bias as scene pages come and go.
+			if (!DirectionalShadowFit::lightward_depth_limit(receivers, transform.basis, p_scenario->shadow_receiver_height_range, z_max)) {
+				// Exactly horizontal lights cannot use a finite height boundary.
+				const Transform3D world_to_light(transform.basis.transposed(), Vector3());
+				for (uint64_t instance_index = 0; instance_index < p_scenario->instance_data.size(); instance_index++) {
+					const InstanceData &idata = p_scenario->instance_data[instance_index];
+					const uint32_t base_type = idata.flags & InstanceData::FLAG_BASE_TYPE_MASK;
+					if (!((1 << base_type) & RSE::INSTANCE_GEOMETRY_MASK) || !(idata.flags & InstanceData::FLAG_CAST_SHADOWS) || !(idata.layer_mask & p_visible_layers & cull.shadows[p_shadow_index].caster_mask)) {
+						continue;
+					}
+					const AABB caster = world_to_light.xform(idata.instance->transformed_aabb);
+					if (DirectionalShadowFit::caster_reaches_receivers(caster, receivers)) {
+						z_max = MAX(z_max, caster.get_end().z);
+					}
+				}
+			}
+			radius = MAX(receivers.size.x, receivers.size.y) * 0.5;
+		}
+
 		//now that we know all ranges, we can proceed to make the light frustum planes, for culling octree
 
 		Vector<Plane> light_frustum_planes;
@@ -2336,7 +2428,7 @@ void RendererSceneCull::_light_instance_setup_directional_shadow(int p_shadow_in
 
 		// a pre pass will need to be needed to determine the actual z-near to be used
 
-		z_max = z_vec.dot(center) + radius + pancake_size;
+		z_max = receiver_fit ? z_max + MAX(pancake_size, (real_t)0.01) : z_vec.dot(center) + radius + pancake_size;
 
 		{
 			Projection ortho_camera;
@@ -2351,7 +2443,14 @@ void RendererSceneCull::_light_instance_setup_directional_shadow(int p_shadow_in
 			ortho_transform.basis = transform.basis;
 			ortho_transform.origin = x_vec * (x_min_cam + half_x) + y_vec * (y_min_cam + half_y) + z_vec * z_max;
 
-			cull.shadows[p_shadow_index].cascades[i].frustum = Frustum(light_frustum_planes);
+			Cull::Shadow::Cascade &cascade = cull.shadows[p_shadow_index].cascades[i];
+			cascade.caster_query_planes.clear();
+			if (receiver_fit && p_scenario->shadow_camera_query) {
+				const real_t filter_padding = soft_shadow_expand + radius * 12.0 / texture_size;
+				cascade.caster_query_planes = DirectionalShadowFit::caster_query(p_cam_projection, p_cam_transform, p_receivers, z_vec,
+						p_scenario->shadow_receiver_height_range, p_scenario->shadow_query_padding + filter_padding);
+			}
+			cascade.frustum = Frustum(cascade.caster_query_planes.is_empty() ? light_frustum_planes : cascade.caster_query_planes);
 			cull.shadows[p_shadow_index].cascades[i].projection = ortho_camera;
 			cull.shadows[p_shadow_index].cascades[i].transform = ortho_transform;
 			cull.shadows[p_shadow_index].cascades[i].zfar = z_max - z_min_cam;
@@ -2443,6 +2542,7 @@ bool RendererSceneCull::_light_instance_update_shadow(Instance *p_instance, cons
 					RSG::mesh_storage->update_mesh_instances();
 
 					RSG::light_storage->light_instance_set_shadow_transform(light->instance, Projection(), light_transform, radius, 0, i, 0);
+					shadow_data.caster_query_planes.clear();
 					shadow_data.light = light->instance;
 					shadow_data.pass = i;
 				}
@@ -2526,6 +2626,7 @@ bool RendererSceneCull::_light_instance_update_shadow(Instance *p_instance, cons
 					RSG::mesh_storage->update_mesh_instances();
 					RSG::light_storage->light_instance_set_shadow_transform(light->instance, cm, xform, radius, 0, i, 0);
 
+					shadow_data.caster_query_planes.clear();
 					shadow_data.light = light->instance;
 					shadow_data.pass = i;
 				}
@@ -2595,7 +2696,8 @@ bool RendererSceneCull::_light_instance_update_shadow(Instance *p_instance, cons
 			RSG::mesh_storage->update_mesh_instances();
 
 			RSG::light_storage->light_instance_set_shadow_transform(light->instance, cm, light_transform, radius, 0, 0, 0);
-			shadow_data.light = light->instance;
+			shadow_data.caster_query_planes.clear();
+					shadow_data.light = light->instance;
 			shadow_data.pass = 0;
 
 		} break;
@@ -2663,7 +2765,8 @@ bool RendererSceneCull::_light_instance_update_shadow(Instance *p_instance, cons
 			RSG::mesh_storage->update_mesh_instances();
 
 			RSG::light_storage->light_instance_set_shadow_transform(light->instance, Projection(), light_transform, radius, 0, 0, 0);
-			shadow_data.light = light->instance;
+			shadow_data.caster_query_planes.clear();
+					shadow_data.light = light->instance;
 			shadow_data.pass = 0;
 		}
 	}
@@ -2672,6 +2775,7 @@ bool RendererSceneCull::_light_instance_update_shadow(Instance *p_instance, cons
 }
 
 void RendererSceneCull::render_camera(const Ref<RenderSceneBuffers> &p_render_buffers, RID p_camera, RID p_scenario, RID p_viewport, Size2 p_viewport_size, uint32_t p_jitter_phase_count, float p_screen_mesh_lod_threshold, RID p_shadow_atlas, Ref<XRInterface> &p_xr_interface, float p_window_output_max_value, RenderingServerTypes::RenderInfo *r_render_info) {
+	FrameCPUProfile::Scope cpu_phase("Camera culling / setup");
 #ifndef _3D_DISABLED
 
 	Camera *camera = camera_owner.get_or_null(p_camera);
@@ -3247,7 +3351,7 @@ void RendererSceneCull::_scene_cull(CullData &cull_data, InstanceCullResult &cul
 
 			for (uint32_t j = 0; j < cull_data.cull->shadow_count; j++) {
 				for (uint32_t k = 0; k < cull_data.cull->shadows[j].cascade_count; k++) {
-					if (!light_culler->cull_directional_light(cull_data.scenario->instance_aabbs[i], j, k)) { // pass the cascade index
+					if (cull_data.cull->shadows[j].cascades[k].caster_query_planes.is_empty() && !light_culler->cull_directional_light(cull_data.scenario->instance_aabbs[i], j, k)) { // pass the cascade index
 						continue;
 					}
 					if (IN_FRUSTUM(cull_data.cull->shadows[j].cascades[k].frustum) && VIS_CHECK) {
@@ -3304,6 +3408,7 @@ void RendererSceneCull::_scene_particles_set_view_axis(RID p_particles, const Ve
 }
 
 void RendererSceneCull::_render_scene(const RendererSceneRender::CameraData *p_camera_data, const Ref<RenderSceneBuffers> &p_render_buffers, RID p_environment, RID p_force_camera_attributes, RID p_compositor, uint32_t p_visible_layers, RID p_scenario, RID p_viewport, RID p_shadow_atlas, RID p_reflection_probe, int p_reflection_probe_pass, float p_screen_mesh_lod_threshold, float p_window_output_max_value, bool p_using_shadows, RenderingServerTypes::RenderInfo *r_render_info, const HashSet<RID> *p_excluded_lights) {
+	FrameCPUProfile::Scope cpu_phase("Scene culling / shadow setup");
 	Instance *render_reflection_probe = instance_owner.get_or_null(p_reflection_probe); //if null, not rendering to it
 
 	// Prepare the light - camera volume culling system.
@@ -3392,8 +3497,16 @@ void RendererSceneCull::_render_scene(const RendererSceneRender::CameraData *p_c
 
 		RSG::light_storage->set_directional_shadow_count(lights_with_shadow.size());
 
+		// Clip the camera to the world's fixed height envelope. Object/page visibility
+		// cannot change the map scale. Offscreen caster depth is handled separately.
+		Vector<Vector3> receiver_points;
+		const Vector2 heights = scenario->shadow_receiver_height_range;
+		if (p_camera_data->is_orthogonal && !lights_with_shadow.is_empty() && heights.y > heights.x) {
+			receiver_points = DirectionalShadowFit::receiver_points(p_camera_data->main_projection, p_camera_data->main_transform, heights);
+		}
+
 		for (int i = 0; i < lights_with_shadow.size(); i++) {
-			_light_instance_setup_directional_shadow(i, lights_with_shadow[i], p_camera_data->main_transform, p_camera_data->main_projection, p_camera_data->is_orthogonal, p_camera_data->vaspect);
+			_light_instance_setup_directional_shadow(i, lights_with_shadow[i], p_camera_data->main_transform, p_camera_data->main_projection, p_camera_data->is_orthogonal, p_camera_data->vaspect, receiver_points, scenario, p_visible_layers);
 		}
 	}
 
@@ -3495,6 +3608,7 @@ void RendererSceneCull::_render_scene(const RendererSceneRender::CameraData *p_c
 				if (max_shadows_used == MAX_UPDATE_SHADOWS) {
 					continue;
 				}
+				render_shadow_data[max_shadows_used].caster_query_planes = c.caster_query_planes;
 				render_shadow_data[max_shadows_used].light = cull.shadows[i].light_instance;
 				render_shadow_data[max_shadows_used].pass = j;
 				render_shadow_data[max_shadows_used].instances.merge_unordered(scene_cull_result.directional_shadows[i].cascade_geometry_instances[j]);
@@ -3713,6 +3827,7 @@ void RendererSceneCull::_render_scene(const RendererSceneRender::CameraData *p_c
 	}
 
 	RENDER_TIMESTAMP("Render 3D Scene");
+	cpu_phase.next("Scene render dispatch");
 	scene_render->render_scene(p_render_buffers, p_camera_data, prev_camera_data, scene_cull_result.geometry_instances, scene_cull_result.light_instances, scene_cull_result.reflections, scene_cull_result.voxel_gi_instances, scene_cull_result.decals, scene_cull_result.lightmaps, scene_cull_result.fog_volumes, p_environment, camera_attributes, p_compositor, p_shadow_atlas, occluders_tex, p_reflection_probe.is_valid() ? RID() : scenario->reflection_atlas, p_reflection_probe, p_reflection_probe_pass, p_screen_mesh_lod_threshold, render_shadow_data, max_shadows_used, render_sdfgi_data, cull.sdfgi.region_count, p_window_output_max_value, &sdfgi_update_data, r_render_info);
 
 	if (p_viewport.is_valid()) {
@@ -4503,15 +4618,18 @@ void RendererSceneCull::_update_dirty_instance(Instance *p_instance) const {
 }
 
 void RendererSceneCull::update_dirty_instances() const {
+	FrameCPUProfile::Scope cpu_dirty("Scene dependency updates");
 	while (_instance_update_list.first()) {
 		_update_dirty_instance(_instance_update_list.first()->self());
 	}
 
 	// Update dirty resources after dirty instances as instance updates may affect resources.
+	cpu_dirty.next("Render resource updates");
 	RSG::utilities->update_dirty_resources();
 }
 
 void RendererSceneCull::update() {
+	FrameCPUProfile::Scope cpu_phase("Scene BVH maintenance");
 	//optimize bvhs
 
 	uint32_t rid_count = scenario_owner.get_rid_count();
@@ -4522,8 +4640,11 @@ void RendererSceneCull::update() {
 		s->indexers[Scenario::INDEXER_GEOMETRY].optimize_incremental(indexer_update_iterations);
 		s->indexers[Scenario::INDEXER_VOLUMES].optimize_incremental(indexer_update_iterations);
 	}
+	cpu_phase.next("Scene render maintenance");
 	scene_render->update();
+	cpu_phase.next("Dirty scene instances");
 	update_dirty_instances();
+	cpu_phase.next("Particle colliders");
 	render_particle_colliders();
 }
 

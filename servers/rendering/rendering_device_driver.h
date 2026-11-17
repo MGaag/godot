@@ -823,6 +823,10 @@ public:
 	// ----- TIMESTAMP -----
 
 	// Basic.
+	// Optional hardware counters inspect actual direct and indirect submissions.
+	virtual QueryPoolID primitive_query_pool_create(uint32_t p_query_count) { return QueryPoolID(); }
+	virtual void command_primitive_query_begin(CommandBufferID p_cmd_buffer, QueryPoolID p_pool_id, uint32_t p_index) {}
+	virtual void command_primitive_query_end(CommandBufferID p_cmd_buffer, QueryPoolID p_pool_id, uint32_t p_index) {}
 	virtual QueryPoolID timestamp_query_pool_create(uint32_t p_query_count) = 0;
 	virtual void timestamp_query_pool_free(QueryPoolID p_pool_id) = 0;
 	virtual void timestamp_query_pool_get_results(QueryPoolID p_pool_id, uint32_t p_query_count, uint64_t *r_results) = 0;

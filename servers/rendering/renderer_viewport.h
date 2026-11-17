@@ -88,6 +88,8 @@ public:
 		RSE::ViewportEnvironmentMode disable_environment = RSE::VIEWPORT_ENVIRONMENT_INHERIT;
 		bool disable_3d = false;
 		bool measure_render_time = false;
+		Callable pre_draw_callback; // Optional render-thread work immediately before viewport rendering.
+		Callable post_draw_callback; // Optional render-thread work ordered before dependent viewports.
 
 		bool snap_2d_transforms_to_pixel = false;
 		bool snap_2d_vertices_to_pixel = false;
@@ -244,6 +246,9 @@ public:
 
 	void viewport_set_clear_mode(RID p_viewport, RSE::ViewportClearMode p_clear_mode);
 
+	// Schedule read/write GPU work after this viewport resolves, on the render thread.
+	void viewport_set_pre_draw_callback(RID p_viewport, const Callable &p_callback);
+	void viewport_set_post_draw_callback(RID p_viewport, const Callable &p_callback);
 	RID viewport_get_render_target(RID p_viewport) const;
 	RID viewport_get_texture(RID p_viewport) const;
 	RID viewport_get_occluder_debug_texture(RID p_viewport) const;

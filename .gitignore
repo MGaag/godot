@@ -396,3 +396,7 @@ $RECYCLE.BIN/
 *.msp
 *.lnk
 *.generated.props
+
+# Local shutdown reproduction projects.
+/.tmp_cc_shutdown_repro/
+/.tmp_shutdown_repro/

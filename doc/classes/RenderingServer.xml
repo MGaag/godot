@@ -3703,6 +3703,14 @@
 				Sets the compositor ([param compositor]) that will be used with this scenario. See also [Compositor].
 			</description>
 		</method>
+		<method name="scenario_set_shadow_receiver_height_range">
+			<return type="void" />
+			<param index="0" name="scenario" type="RID" />
+			<param index="1" name="height_range" type="Vector2" />
+			<description>
+				Sets the fixed minimum and maximum world Y of shadow receivers. Single-map orthographic directional shadows fit the camera clipped to this range, retaining lightward offscreen casters. Equal endpoints disable receiver fitting. Camera clipping and geometry residency are unchanged.
+			</description>
+		</method>
 		<method name="scenario_set_environment">
 			<return type="void" />
 			<param index="0" name="scenario" type="RID" />
@@ -3905,6 +3913,13 @@
 			<description>
 				Creates an empty sky and adds it to the RenderingServer. It can be accessed with the RID that is returned. This RID will be used in all [code]sky_*[/code] RenderingServer functions.
 				Once finished with your RID, you will want to free the RID using the RenderingServer's [method free_rid] method.
+			</description>
+		</method>
+		<method name="sky_get_cosine_cone_texture_rd">
+			<return type="RID" />
+			<param index="0" name="sky" type="RID" />
+			<description>
+				Returns the borrowed RenderingDevice texture array containing normalized cosine-weighted sky visibility-cone integrals. Returns an invalid RID if the renderer does not support it, filtering is disabled, or the sky has not rendered yet. Angular levels double their linear footprint, ending at a full hemisphere. The texture belongs to the Sky; do not free it. Reacquire it after sky resource regeneration. It can be inspected through Texture2DArrayRD without copying or reading back its contents.
 			</description>
 		</method>
 		<method name="sky_set_material">
@@ -5877,6 +5892,9 @@
 		</constant>
 		<constant name="ENV_REFLECTION_SOURCE_SKY" value="2" enum="EnvironmentReflectionSource">
 			Use the [Sky] for reflections regardless of what the background is.
+		</constant>
+		<constant name="ENV_TONE_MAPPER_GT7" value="5" enum="EnvironmentToneMapper">
+			Uses the SDR GT7 transform through a cached 65-cubed HDR lookup. Bright colors roll toward white before display encoding. Available in Forward+ and Mobile. The lookup is baked once and uses approximately 2.1 MiB. HDR output is not supported. Mobile requires a float scene buffer to retain scene values above two; enable [member Viewport.use_hdr_2d] when that headroom is needed.
 		</constant>
 		<constant name="ENV_GLOW_BLEND_MODE_ADDITIVE" value="0" enum="EnvironmentGlowBlendMode">
 			Adds the glow effect to the scene.

@@ -75,6 +75,11 @@ void RendererSceneRenderRD::sky_set_material(RID p_sky, RID p_material) {
 	sky.sky_set_material(p_sky, p_material);
 }
 
+// Expose the canonical GPU hierarchy without a readback or duplicate texture.
+RID RendererSceneRenderRD::sky_get_cosine_cone_texture_rd(RID p_sky) {
+	return sky.sky_get_cosine_cone_texture_rd(p_sky);
+}
+
 Ref<Image> RendererSceneRenderRD::sky_bake_panorama(RID p_sky, float p_energy, bool p_bake_irradiance, const Size2i &p_size) {
 	return sky.sky_bake_panorama(p_sky, p_energy, p_bake_irradiance, p_size);
 }
@@ -1506,6 +1511,10 @@ void RendererSceneRenderRD::render_scene(const Ref<RenderSceneBuffers> &p_render
 	}
 
 	//calls _pre_opaque_render between depth pre-pass and opaque pass
+	// GT7's one-time compute bake must precede Mobile's scene/subpass draw list.
+	if (render_data.environment.is_valid()) {
+		tone_mapper->prepare(environment_get_tone_mapper(render_data.environment));
+	}
 	_render_scene(&render_data, clear_color);
 }
 

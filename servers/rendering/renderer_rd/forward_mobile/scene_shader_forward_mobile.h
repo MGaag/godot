@@ -293,7 +293,8 @@ public:
 
 		_FORCE_INLINE_ bool uses_alpha_pass() const {
 			bool has_read_screen_alpha = uses_screen_texture || uses_depth_texture || uses_normal_texture;
-			bool has_base_alpha = (uses_alpha && (!uses_alpha_clip || uses_alpha_antialiasing));
+			// Coverage writes opaque MSAA samples before screen/depth snapshots.
+			bool has_base_alpha = uses_alpha && (!uses_alpha_clip || uses_alpha_antialiasing) && alpha_antialiasing_mode == ALPHA_ANTIALIASING_OFF;
 			bool has_blend_alpha = uses_blend_alpha;
 			bool has_alpha = has_base_alpha || has_blend_alpha;
 			bool no_depth_draw = depth_draw == DEPTH_DRAW_DISABLED;
@@ -309,7 +310,7 @@ public:
 
 		_FORCE_INLINE_ bool uses_shared_shadow_material() const {
 			bool backface_culling = cull_mode == RSE::CULL_MODE_BACK;
-			return !uses_particle_trails && !writes_modelview_or_projection && !uses_vertex && !uses_discard && !uses_depth_prepass_alpha && !uses_alpha_clip && !uses_alpha_antialiasing && !uses_point_size && !uses_world_coordinates && !wireframe && !stencil_enabled && backface_culling;
+			return alpha_antialiasing_mode == ALPHA_ANTIALIASING_OFF && !uses_particle_trails && !writes_modelview_or_projection && !uses_vertex && !uses_discard && !uses_depth_prepass_alpha && !uses_alpha_clip && !uses_alpha_antialiasing && !uses_point_size && !uses_world_coordinates && !wireframe && !stencil_enabled && backface_culling;
 		}
 
 		virtual void set_code(const String &p_Code);

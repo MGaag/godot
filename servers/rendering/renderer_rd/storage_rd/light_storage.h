@@ -222,6 +222,7 @@ private:
 		float uv_scale2[2];
 		float uv_scale3[2];
 		float uv_scale4[2];
+		float shadow_atlas_rects[4][4];
 	};
 
 	uint32_t max_directional_lights;
@@ -445,7 +446,9 @@ private:
 		RID fb; //when renderign direct
 
 		int light_count = 0;
-		int size = 0;
+		int size = 0; // Power-of-two backing allocation.
+		int resolution = 0; // Active raster region; fitting uses this texel count.
+		bool needs_clear = true;
 		bool use_16_bits = true;
 		int current_light = 0;
 	} directional_shadow;

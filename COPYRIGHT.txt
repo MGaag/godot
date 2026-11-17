@@ -35,6 +35,13 @@ Comment:
  Note: When linking dynamically against thirdparty libraries instead of
  building them into the Godot binary, you may remove the corresponding
  license details from this file.
+Files: servers/rendering/renderer_rd/shaders/effects/gt7_lut.glsl
+Comment: SDR GT7 transform adapted from google/filament ToneMapper.cpp;
+ color conversions adapted from google/filament ColorSpaceUtils.h.
+Copyright: 2025, Polyphony Digital Inc.
+ 2020, The Android Open Source Project
+License: Expat and Apache-2.0
+
 Upstream-Name: Godot Engine
 Upstream-Contact: Rémi Verschelde <contact@godotengine.org>
 Source: https://github.com/godotengine/godot

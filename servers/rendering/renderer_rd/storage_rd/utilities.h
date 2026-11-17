@@ -89,6 +89,12 @@ public:
 	virtual AABB visibility_notifier_get_aabb(RID p_notifier) const override;
 	virtual void visibility_notifier_call(RID p_notifier, bool p_enter, bool p_deferred) override;
 
+protected:
+	// The RD frame ring selects one shared frame for timings and hardware counts.
+	virtual void _set_pipeline_draw_statistics_enabled(bool p_enabled) override;
+	virtual bool _pipeline_profile_frame_active() override;
+
+public:
 	/* TIMING */
 
 	virtual void capture_timestamps_begin() override;

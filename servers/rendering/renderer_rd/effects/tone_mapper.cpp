@@ -32,6 +32,7 @@
 
 #include "servers/rendering/renderer_rd/renderer_compositor_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/material_storage.h"
+#include "servers/rendering/renderer_rd/storage_rd/texture_storage.h"
 #include "servers/rendering/renderer_rd/uniform_set_cache_rd.h"
 
 using namespace RendererRD;
@@ -106,7 +107,17 @@ ToneMapper::ToneMapper(bool p_use_mobile_version) {
 	}
 }
 
+// The renderer calls this before recording draws, so LUT baking can dispatch safely.
+void ToneMapper::prepare(RSE::EnvironmentToneMapper p_mode) {
+	if (p_mode == RSE::ENV_TONE_MAPPER_GT7 && !gt7_lut) {
+		gt7_lut = memnew(GT7LUT);
+	}
+}
+
 ToneMapper::~ToneMapper() {
+	if (gt7_lut) {
+		memdelete(gt7_lut);
+	}
 	if (using_mobile_version) {
 		tonemap_mobile.shader.version_free(tonemap_mobile.shader_version);
 	} else {
@@ -204,6 +215,11 @@ void ToneMapper::tonemapper(RID p_source_color, RID p_dst_framebuffer, const Ton
 	u_color_correction_texture.binding = 0;
 	u_color_correction_texture.append_id(default_sampler);
 	u_color_correction_texture.append_id(p_settings.color_correction_texture);
+	RD::Uniform u_gt7_lut;
+	u_gt7_lut.uniform_type = RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;
+	u_gt7_lut.binding = 1;
+	u_gt7_lut.append_id(default_sampler);
+	u_gt7_lut.append_id(gt7_lut ? gt7_lut->get_texture() : TextureStorage::get_singleton()->texture_rd_get_default(TextureStorage::DEFAULT_RD_TEXTURE_3D_WHITE));
 
 	RID shader = tonemap.shader.version_get_shader(tonemap.shader_version, mode);
 	ERR_FAIL_COND(shader.is_null());
@@ -213,7 +229,7 @@ void ToneMapper::tonemapper(RID p_source_color, RID p_dst_framebuffer, const Ton
 	RD::get_singleton()->draw_list_bind_uniform_set(draw_list, uniform_set_cache->get_cache(shader, 0, u_source_color), 0);
 	RD::get_singleton()->draw_list_bind_uniform_set(draw_list, uniform_set_cache->get_cache(shader, 1, u_exposure_texture), 1);
 	RD::get_singleton()->draw_list_bind_uniform_set(draw_list, uniform_set_cache->get_cache(shader, 2, u_glow_texture, u_glow_map), 2);
-	RD::get_singleton()->draw_list_bind_uniform_set(draw_list, uniform_set_cache->get_cache(shader, 3, u_color_correction_texture), 3);
+	RD::get_singleton()->draw_list_bind_uniform_set(draw_list, uniform_set_cache->get_cache(shader, 3, u_color_correction_texture, u_gt7_lut), 3);
 
 	RD::get_singleton()->draw_list_set_push_constant(draw_list, &tonemap.push_constant, sizeof(TonemapPushConstant));
 	RD::get_singleton()->draw_list_draw(draw_list, false, 1u, 3u);
@@ -264,6 +280,7 @@ void ToneMapper::tonemapper_mobile(RID p_source_color, RID p_dst_framebuffer, co
 	spec_constant |= p_settings.tonemap_mode == RSE::ENV_TONE_MAPPER_FILMIC ? TONEMAP_MOBILE_FLAG_TONEMAPPER_FILMIC : 0;
 	spec_constant |= p_settings.tonemap_mode == RSE::ENV_TONE_MAPPER_ACES ? TONEMAP_MOBILE_FLAG_TONEMAPPER_ACES : 0;
 	spec_constant |= p_settings.tonemap_mode == RSE::ENV_TONE_MAPPER_AGX ? TONEMAP_MOBILE_FLAG_TONEMAPPER_AGX : 0;
+	spec_constant |= p_settings.tonemap_mode == RSE::ENV_TONE_MAPPER_GT7 ? TONEMAP_MOBILE_FLAG_TONEMAPPER_GT7 : 0;
 	spec_constant |= p_settings.glow_mode == RSE::ENV_GLOW_BLEND_MODE_ADDITIVE ? TONEMAP_MOBILE_FLAG_GLOW_MODE_ADD : 0;
 	spec_constant |= p_settings.glow_mode == RSE::ENV_GLOW_BLEND_MODE_SCREEN ? TONEMAP_MOBILE_FLAG_GLOW_MODE_SCREEN : 0;
 	spec_constant |= p_settings.glow_mode == RSE::ENV_GLOW_BLEND_MODE_SOFTLIGHT ? TONEMAP_MOBILE_FLAG_GLOW_MODE_SOFTLIGHT : 0;
@@ -300,13 +317,18 @@ void ToneMapper::tonemapper_mobile(RID p_source_color, RID p_dst_framebuffer, co
 	u_color_correction_texture.binding = 3;
 	u_color_correction_texture.append_id(default_sampler);
 	u_color_correction_texture.append_id(p_settings.color_correction_texture);
+	RD::Uniform u_gt7_lut;
+	u_gt7_lut.uniform_type = RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;
+	u_gt7_lut.binding = 4;
+	u_gt7_lut.append_id(default_sampler);
+	u_gt7_lut.append_id(gt7_lut ? gt7_lut->get_texture() : TextureStorage::get_singleton()->texture_rd_get_default(TextureStorage::DEFAULT_RD_TEXTURE_3D_WHITE));
 
 	RID shader = tonemap_mobile.shader.version_get_shader(tonemap_mobile.shader_version, mode);
 	ERR_FAIL_COND(shader.is_null());
 
 	RD::DrawListID draw_list = RD::get_singleton()->draw_list_begin(p_dst_framebuffer);
 	RD::get_singleton()->draw_list_bind_render_pipeline(draw_list, tonemap_mobile.pipelines[mode].get_render_pipeline(RD::INVALID_ID, RD::get_singleton()->framebuffer_get_format(p_dst_framebuffer), false, RD::get_singleton()->draw_list_get_current_pass(), spec_constant));
-	RD::get_singleton()->draw_list_bind_uniform_set(draw_list, uniform_set_cache->get_cache(shader, 0, u_source_color, u_glow_texture, u_glow_map, u_color_correction_texture), 0);
+	RD::get_singleton()->draw_list_bind_uniform_set(draw_list, uniform_set_cache->get_cache(shader, 0, u_source_color, u_glow_texture, u_glow_map, u_color_correction_texture, u_gt7_lut), 0);
 	RD::get_singleton()->draw_list_set_push_constant(draw_list, &tonemap_mobile.push_constant, sizeof(TonemapPushConstantMobile));
 	RD::get_singleton()->draw_list_draw(draw_list, false, 1u, 3u);
 	RD::get_singleton()->draw_list_end();
@@ -354,6 +376,7 @@ void ToneMapper::tonemapper_subpass(RD::DrawListID p_subpass_draw_list, RID p_so
 	spec_constant |= p_settings.tonemap_mode == RSE::ENV_TONE_MAPPER_FILMIC ? TONEMAP_MOBILE_FLAG_TONEMAPPER_FILMIC : 0;
 	spec_constant |= p_settings.tonemap_mode == RSE::ENV_TONE_MAPPER_ACES ? TONEMAP_MOBILE_FLAG_TONEMAPPER_ACES : 0;
 	spec_constant |= p_settings.tonemap_mode == RSE::ENV_TONE_MAPPER_AGX ? TONEMAP_MOBILE_FLAG_TONEMAPPER_AGX : 0;
+	spec_constant |= p_settings.tonemap_mode == RSE::ENV_TONE_MAPPER_GT7 ? TONEMAP_MOBILE_FLAG_TONEMAPPER_GT7 : 0;
 	//spec_constant |= p_settings.glow_mode == RSE::ENV_GLOW_BLEND_MODE_ADDITIVE ? TONEMAP_MOBILE_FLAG_GLOW_MODE_ADD : 0;
 	//spec_constant |= p_settings.glow_mode == RSE::ENV_GLOW_BLEND_MODE_SCREEN ? TONEMAP_MOBILE_FLAG_GLOW_MODE_SCREEN : 0;
 	//spec_constant |= p_settings.glow_mode == RSE::ENV_GLOW_BLEND_MODE_SOFTLIGHT ? TONEMAP_MOBILE_FLAG_GLOW_MODE_SOFTLIGHT : 0;
@@ -391,12 +414,17 @@ void ToneMapper::tonemapper_subpass(RD::DrawListID p_subpass_draw_list, RID p_so
 	u_color_correction_texture.binding = 3;
 	u_color_correction_texture.append_id(default_sampler);
 	u_color_correction_texture.append_id(p_settings.color_correction_texture);
+	RD::Uniform u_gt7_lut;
+	u_gt7_lut.uniform_type = RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;
+	u_gt7_lut.binding = 4;
+	u_gt7_lut.append_id(default_sampler);
+	u_gt7_lut.append_id(gt7_lut ? gt7_lut->get_texture() : TextureStorage::get_singleton()->texture_rd_get_default(TextureStorage::DEFAULT_RD_TEXTURE_3D_WHITE));
 
 	RID shader = tonemap_mobile.shader.version_get_shader(tonemap_mobile.shader_version, mode);
 	ERR_FAIL_COND(shader.is_null());
 
 	RD::get_singleton()->draw_list_bind_render_pipeline(p_subpass_draw_list, tonemap_mobile.pipelines[mode].get_render_pipeline(RD::INVALID_ID, p_dst_format_id, false, RD::get_singleton()->draw_list_get_current_pass(), spec_constant));
-	RD::get_singleton()->draw_list_bind_uniform_set(p_subpass_draw_list, uniform_set_cache->get_cache(shader, 0, u_source_color, u_glow_texture, u_glow_map, u_color_correction_texture), 0);
+	RD::get_singleton()->draw_list_bind_uniform_set(p_subpass_draw_list, uniform_set_cache->get_cache(shader, 0, u_source_color, u_glow_texture, u_glow_map, u_color_correction_texture, u_gt7_lut), 0);
 	RD::get_singleton()->draw_list_set_push_constant(p_subpass_draw_list, &tonemap_mobile.push_constant, sizeof(TonemapPushConstantMobile));
 	RD::get_singleton()->draw_list_draw(p_subpass_draw_list, false, 1u, 3u);
 }

@@ -266,7 +266,7 @@ float RendererEnvironmentStorage::environment_get_white(RID p_env, bool p_limit_
 	// it is at least 1.0 for all tonemappers:
 	if (env->tone_mapper == RSE::ENV_TONE_MAPPER_LINEAR) {
 		return p_output_max_value;
-	} else if (env->tone_mapper == RSE::ENV_TONE_MAPPER_FILMIC || env->tone_mapper == RSE::ENV_TONE_MAPPER_ACES) {
+	} else if (env->tone_mapper == RSE::ENV_TONE_MAPPER_FILMIC || env->tone_mapper == RSE::ENV_TONE_MAPPER_ACES || env->tone_mapper == RSE::ENV_TONE_MAPPER_GT7) {
 		// Filmic and ACES only support SDR; their white is stable regardless
 		// of output_max_value.
 		return MAX(1.0, env->white);

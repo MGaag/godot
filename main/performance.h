@@ -137,6 +137,11 @@ public:
 
 	MonitorType get_monitor_type(Monitor p_monitor) const;
 
+	void set_cpu_frame_profiling_enabled(bool p_enabled);
+	Dictionary take_cpu_frame_profile();
+	int64_t begin_cpu_frame_scope(const String &p_name);
+	void end_cpu_frame_scope(int64_t p_generation);
+
 	void set_process_time(double p_pt);
 	void set_physics_process_time(double p_pt);
 	void set_navigation_process_time(double p_pt);

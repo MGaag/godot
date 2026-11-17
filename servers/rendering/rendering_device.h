@@ -45,6 +45,8 @@
 #include "servers/rendering/rendering_device_enums.h"
 #include "servers/rendering/rendering_device_graph.h"
 
+// Owns device resources and asynchronous GPU queries; optional in-pass profiling reserves complete timestamp pairs without restarting passes. RenderingDeviceGraph records their execution order.
+
 class RDTextureFormat;
 class RDTextureView;
 class RDAttachmentFormat;
@@ -306,6 +308,7 @@ public:
 		CALLBACK_RESOURCE_USAGE_GENERAL,
 		CALLBACK_RESOURCE_USAGE_ACCELERATION_STRUCTURE_READ,
 		CALLBACK_RESOURCE_USAGE_ACCELERATION_STRUCTURE_READ_WRITE,
+		CALLBACK_RESOURCE_USAGE_STORAGE_INDIRECT_BUFFER_READ,
 		CALLBACK_RESOURCE_USAGE_MAX
 	};
 
@@ -1219,6 +1222,7 @@ private:
 			uint32_t primitive_divisor = 0;
 		} validation;
 #endif
+		bool triangle_topology = false; // Hardware primitive queries exclude lines, points and patches.
 		// Actual pipeline.
 		RID shader;
 		RDD::ShaderID shader_driver_id;
@@ -1436,6 +1440,10 @@ private:
 	// also run in release builds.
 
 	struct DrawList {
+		int32_t profile_end_index = -1; // Reserved matching end query; -1 means no active scope.
+		int32_t primitive_query_index = -1; // Active hardware scope, closed before pass retirement.
+		String primitive_profile_name; // Optional contiguous draw owner supplied by renderer labels.
+		String primitive_active_name; // Category of the active query, for grouping without reordering.
 		Rect2i viewport;
 		bool active = false;
 
@@ -1458,6 +1466,7 @@ private:
 			RID vertex_array;
 			RID index_array;
 			uint32_t draw_count = 0;
+			bool triangle_topology = false; // Cached from the bound pipeline for the optional counter.
 		} state;
 
 #ifdef DEBUG_ENABLED
@@ -1501,6 +1510,9 @@ private:
 
 	LocalVector<RID> draw_list_bound_textures;
 
+	// Start/finish disjoint triangle scopes without changing submitted draws.
+	void _prepare_primitive_query();
+	void _end_primitive_query();
 	void _draw_list_start(const Rect2i &p_viewport);
 	void _draw_list_end(Rect2i *r_last_viewport = nullptr);
 
@@ -1555,7 +1567,7 @@ public:
 	void draw_list_set_push_constant(DrawListID p_list, const void *p_data, uint32_t p_data_size);
 
 	void draw_list_draw(DrawListID p_list, bool p_use_indices, uint32_t p_instances = 1, uint32_t p_procedural_vertices = 0);
-	void draw_list_draw_indirect(DrawListID p_list, bool p_use_indices, RID p_buffer, uint32_t p_offset = 0, uint32_t p_draw_count = 1, uint32_t p_stride = 0);
+	void draw_list_draw_indirect(DrawListID p_list, bool p_use_indices, RID p_buffer, uint32_t p_offset = 0, uint32_t p_draw_count = 1, uint32_t p_stride = 0, uint32_t p_profile_primitives_per_instance = 0);
 
 	void draw_list_set_viewport(DrawListID p_list, const Rect2 &p_rect);
 	void draw_list_enable_scissor(DrawListID p_list, const Rect2 &p_rect);
@@ -1565,6 +1577,10 @@ public:
 	DrawListID draw_list_switch_to_next_pass();
 
 	void draw_list_end();
+	// Opens one optional in-pass scope; reserves its end and leaves room for normal pass markers.
+	bool draw_list_begin_profile(const String &p_name);
+	// Closes the reserved scope without a fence, readback, or render-pass restart.
+	void draw_list_end_profile();
 
 private:
 	/**************************/
@@ -1842,9 +1858,29 @@ private:
 		TightLocalVector<uint64_t> timestamp_cpu_result_values;
 		TightLocalVector<uint64_t> timestamp_result_values;
 		uint32_t timestamp_result_count = 0;
+		uint64_t timestamp_result_frame = 0; // Completed frame identity shared by timings and counts.
+		RDD::QueryPoolID primitive_pool; // Lazily allocated only when profiling is first enabled.
+		TightLocalVector<String> primitive_names; // One owner per disjoint recorded scope.
+		TightLocalVector<uint32_t> primitive_instance_divisors; // Fixed-geometry indirect scopes reconstruct processed instances.
+		Dictionary batch_counts; // Submitted draw commands, including empty indirect commands.
+		Dictionary instance_counts; // Direct counts plus resolved indirect hardware scopes.
+		TightLocalVector<uint64_t> primitive_values; // Raw hardware results, never timestamp-scaled.
+		uint32_t primitive_count = 0; // Number of complete recorded scopes in this frame.
+		bool primitive_complete = true; // Exhaustion invalidates the entire count snapshot.
 		uint64_t index = 0;
 	};
 
+	static constexpr uint32_t MAX_PRIMITIVE_QUERY_SCOPES = 4096; // Bounded diagnostic memory and work.
+	bool draw_statistics_initialized = false; // Remember optional hardware support after first request.
+	bool draw_statistics_supported = false; // True only when every frame has a complete counter pool.
+	bool draw_statistics_enabled = false; // The existing pipeline profiler owns this switch.
+	bool draw_statistics_capture = false; // One shared sampled frame for all timing/count producers.
+	uint32_t draw_statistics_frame = 0; // Capture-local cadence, reset on enable.
+	String draw_statistics_category = "Other stages"; // Latest real stage marker, before draw labels.
+	Dictionary latest_draw_statistics; // Immutable completed-frame snapshot returned by value.
+	// Retire query results only after the existing frame fence has completed.
+	void _begin_draw_statistics_frame();
+	void _record_draw_counts(uint32_t p_batches, uint32_t p_instances, bool p_instances_known);
 	uint32_t max_timestamp_query_elements = 0;
 
 	int frame = 0;
@@ -1905,6 +1941,14 @@ public:
 	/**** Timing ****/
 	/****************/
 
+	// Renderer-internal control: no queries or readbacks are scheduled while disabled.
+	void set_draw_statistics_enabled(bool p_enabled);
+	// True only for the same sampled GPU frame used by detailed timestamps.
+	bool is_draw_statistics_frame_active() const { return draw_statistics_capture; }
+	// Optional hardware support; unsupported devices never return estimated counts.
+	bool is_draw_statistics_supported() const { return draw_statistics_supported; }
+	// Return submitted triangle counts and their completed frame/category identity.
+	Dictionary get_draw_statistics() const;
 	void capture_timestamp(const String &p_name);
 	uint32_t get_captured_timestamps_count() const;
 	uint64_t get_captured_timestamps_frame() const;

@@ -33,6 +33,8 @@
 #include "servers/rendering/rendering_server_enums.h"
 #include "servers/rendering/rendering_server_types.h"
 
+// Defines canvas draw payloads and their diagnostic ownership; the RD renderer aggregates labels without splitting existing batches. Scene-tree mutation remains in RendererCanvasCull.
+
 class RenderingServer;
 
 class RendererCanvasRender {
@@ -166,6 +168,7 @@ public:
 	//item
 
 	struct Item {
+		StringName profile_label; // Diagnostic draw owner; empty by default, no rendering semantics.
 		//commands are allocated in blocks of 4k to improve performance
 		//and cache coherence.
 		//blocks always grow but never shrink.

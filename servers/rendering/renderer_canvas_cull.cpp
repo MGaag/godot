@@ -30,6 +30,8 @@
 
 #include "renderer_canvas_cull.h"
 
+#include "main/frame_cpu_profile.h"
+
 #include "core/config/engine.h"
 #include "core/config/project_settings.h"
 #include "core/math/geometry_2d.h"
@@ -38,6 +40,8 @@
 #include "servers/rendering/rendering_server_default.h"
 #include "servers/rendering/rendering_server_globals.h"
 #include "servers/rendering/storage/texture_storage.h"
+
+// Owns canvas-tree submission; diagnostic item labels feed RD batch profiling without changing culling. Canvas drawing remains in RendererCanvasRender.
 
 // Use the same antialiasing feather size as StyleBoxFlat's default
 // (but doubled, as it's specified for both sides here).
@@ -493,6 +497,7 @@ void RendererCanvasCull::_cull_canvas_item(Item *p_canvas_item, const Transform2
 }
 
 void RendererCanvasCull::render_canvas(RID p_render_target, Canvas *p_canvas, const Transform2D &p_transform, RendererCanvasRender::Light *p_lights, RendererCanvasRender::Light *p_directional_lights, const Rect2 &p_clip_rect, RSE::CanvasItemTextureFilter p_default_filter, RSE::CanvasItemTextureRepeat p_default_repeat, bool p_snap_2d_transforms_to_pixel, bool p_snap_2d_vertices_to_pixel, uint32_t canvas_cull_mask, RenderingServerTypes::RenderInfo *r_render_info) {
+	FrameCPUProfile::Scope cpu_phase("Canvas traversal");
 	sdf_used = false;
 	snapping_2d_transforms_to_pixel = p_snap_2d_transforms_to_pixel;
 
@@ -647,6 +652,13 @@ void RendererCanvasCull::canvas_item_set_transform(RID p_item, const Transform2D
 	}
 
 	canvas_item->xform_curr = p_transform;
+}
+
+// Retains profiling ownership at the canonical canvas item, independently of visibility.
+void RendererCanvasCull::canvas_item_set_profile_label(RID p_item, const StringName &p_label) {
+	Item *canvas_item = canvas_item_owner.get_or_null(p_item);
+	ERR_FAIL_NULL(canvas_item);
+	canvas_item->profile_label = p_label;
 }
 
 void RendererCanvasCull::canvas_item_set_visibility_layer(RID p_item, uint32_t p_visibility_layer) {

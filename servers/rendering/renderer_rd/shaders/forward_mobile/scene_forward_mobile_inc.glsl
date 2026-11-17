@@ -18,6 +18,7 @@ layout(push_constant, std430) uniform DrawCall {
 	uint instance_index;
 	uint multimesh_motion_vectors_current_offset;
 	uint multimesh_motion_vectors_previous_offset;
+	uint compact_placement_ids;
 #ifdef UBERSHADER
 	uint sc_packed_0;
 	uint sc_packed_1;
@@ -222,6 +223,7 @@ half sc_luminance_multiplier() {
 }
 
 layout(constant_id = 3) const bool sc_emulate_point_size = false;
+layout(constant_id = 4) const bool sc_alpha_to_coverage_cutout = false;
 
 #ifdef POINT_SIZE_USED
 
@@ -402,6 +404,9 @@ layout(set = 1, binding = 10) uniform texture2D color_buffer;
 layout(set = 1, binding = 11) uniform sampler decal_sampler;
 
 layout(set = 1, binding = 12) uniform sampler light_projector_sampler;
+
+// Normalized cosine-weighted sky integrals; layers encode cone footprints.
+layout(set = 1, binding = 29) uniform texture2DArray sky_cosine_cones;
 
 layout(set = 1, binding = 25, std430) restrict readonly buffer CellLightProbeCoefficients
 {

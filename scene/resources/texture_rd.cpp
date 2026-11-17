@@ -206,7 +206,7 @@ void TextureLayeredRD::_set_texture_rd_rid(RID p_texture_rd_rid) {
 	ERR_FAIL_COND(tf.depth > 1);
 	switch (layer_type) {
 		case LAYERED_TYPE_2D_ARRAY: {
-			ERR_FAIL_COND(tf.array_layers <= 1);
+			ERR_FAIL_COND(tf.array_layers == 0);
 			rs_layer_type = RSE::TEXTURE_LAYERED_2D_ARRAY;
 		} break;
 		case LAYERED_TYPE_CUBEMAP: {

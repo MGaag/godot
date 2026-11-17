@@ -628,6 +628,13 @@
 				This is only used by Vulkan in debug builds and can return 0 when this information is not tracked or unknown.
 			</description>
 		</method>
+		<method name="get_draw_statistics" qualifiers="const">
+			<return type="Dictionary" />
+			<description>
+				Returns the last completed hardware triangle-count sample for the opt-in renderer pipeline profiler. Call this on the render thread. The dictionary always contains [code]enabled[/code] and [code]supported[/code]. A sample also contains [code]frame[/code] and [code]complete[/code]. Only complete samples contain [code]triangles[/code] and a [code]categories[/code] dictionary of disjoint submitted-triangle counts.
+				Counts include indirect instances and repeated pass submissions, such as shadow cascades. Points, lines, tessellation patches, and compute work are excluded. Compare [code]frame[/code] with [method get_captured_timestamps_frame] before combining counts and timings. Unsupported hardware or disabled capture does not provide counts. Results reuse completed frame fences and never wait for additional GPU work.
+			</description>
+		</method>
 		<method name="get_driver_and_device_memory_report" qualifiers="const">
 			<return type="String" />
 			<description>

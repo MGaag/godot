@@ -2191,7 +2191,7 @@ void TextureStorage::texture_rd_initialize(RID p_texture, const RID &p_rd_textur
 		case RD::TEXTURE_TYPE_CUBE_ARRAY: {
 			// RenderingDevice doesn't distinguish between Array textures and Cube textures
 			// this condition covers TextureArrays, TextureCube, and TextureCubeArray.
-			ERR_FAIL_COND(tf.array_layers == 1);
+			ERR_FAIL_COND(tf.array_layers == 0 || (tf.texture_type != RD::TEXTURE_TYPE_2D_ARRAY && tf.array_layers == 1));
 			texture.type = TextureStorage::TYPE_LAYERED;
 			texture.layered_type = p_layer_type;
 		} break;

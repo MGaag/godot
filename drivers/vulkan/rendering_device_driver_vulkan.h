@@ -753,6 +753,10 @@ public:
 	// ----- TIMESTAMP -----
 
 	// Basic.
+	// Input-assembly counters share frame-owned query lifetime and completed-frame readback.
+	virtual QueryPoolID primitive_query_pool_create(uint32_t p_query_count) override final;
+	virtual void command_primitive_query_begin(CommandBufferID p_cmd_buffer, QueryPoolID p_pool_id, uint32_t p_index) override final;
+	virtual void command_primitive_query_end(CommandBufferID p_cmd_buffer, QueryPoolID p_pool_id, uint32_t p_index) override final;
 	virtual QueryPoolID timestamp_query_pool_create(uint32_t p_query_count) override final;
 	virtual void timestamp_query_pool_free(QueryPoolID p_pool_id) override final;
 	virtual void timestamp_query_pool_get_results(QueryPoolID p_pool_id, uint32_t p_query_count, uint64_t *r_results) override final;

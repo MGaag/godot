@@ -305,7 +305,7 @@ bool SceneShaderForwardMobile::ShaderData::is_animated() const {
 
 bool SceneShaderForwardMobile::ShaderData::casts_shadows() const {
 	bool has_read_screen_alpha = uses_screen_texture || uses_depth_texture || uses_normal_texture;
-	bool has_base_alpha = (uses_alpha && (!uses_alpha_clip || uses_alpha_antialiasing)) || has_read_screen_alpha;
+	bool has_base_alpha = (uses_alpha && (!uses_alpha_clip || uses_alpha_antialiasing) && alpha_antialiasing_mode == ALPHA_ANTIALIASING_OFF) || has_read_screen_alpha;
 	bool has_alpha = has_base_alpha || uses_blend_alpha;
 
 	return !has_alpha || (uses_depth_prepass_alpha && !(depth_draw == DEPTH_DRAW_DISABLED || depth_test != DEPTH_TEST_ENABLED));
@@ -440,20 +440,25 @@ void SceneShaderForwardMobile::ShaderData::_create_pipeline(PipelineKey p_pipeli
 
 	RD::PipelineMultisampleState multisample_state;
 	multisample_state.sample_count = RD::get_singleton()->framebuffer_format_get_texture_samples(p_pipeline_key.framebuffer_format_id, 0);
+	const bool alpha_to_coverage_cutout = alpha_antialiasing_mode != ALPHA_ANTIALIASING_OFF && multisample_state.sample_count == RD::TEXTURE_SAMPLES_1;
+	if (alpha_to_coverage_cutout) {
+		// A single sample uses an opaque cutout instead of coverage and blending.
+		blend_state_blend.attachments.write[0].enable_blend = false;
+	}
 
 	RD::PipelineColorBlendState blend_state;
 	if (uses_alpha || uses_blend_alpha) {
 		// These flags should only go through if we have some form of MSAA.
-		if (alpha_antialiasing_mode == ALPHA_ANTIALIASING_ALPHA_TO_COVERAGE) {
+		if (!alpha_to_coverage_cutout && alpha_antialiasing_mode == ALPHA_ANTIALIASING_ALPHA_TO_COVERAGE) {
 			multisample_state.enable_alpha_to_coverage = true;
-		} else if (alpha_antialiasing_mode == ALPHA_ANTIALIASING_ALPHA_TO_COVERAGE_AND_TO_ONE) {
+		} else if (!alpha_to_coverage_cutout && alpha_antialiasing_mode == ALPHA_ANTIALIASING_ALPHA_TO_COVERAGE_AND_TO_ONE) {
 			multisample_state.enable_alpha_to_coverage = true;
 			multisample_state.enable_alpha_to_one = true;
 		}
 
 		if (p_pipeline_key.version == SHADER_VERSION_COLOR_PASS || p_pipeline_key.version == SHADER_VERSION_COLOR_PASS_MULTIVIEW || p_pipeline_key.version == SHADER_VERSION_LIGHTMAP_COLOR_PASS || p_pipeline_key.version == SHADER_VERSION_LIGHTMAP_COLOR_PASS_MULTIVIEW || p_pipeline_key.version == SHADER_VERSION_MOTION_VECTORS_MULTIVIEW) {
 			blend_state = blend_state_blend;
-			if (depth_draw == DEPTH_DRAW_OPAQUE && !uses_alpha_clip) {
+			if (depth_draw == DEPTH_DRAW_OPAQUE && !uses_alpha_clip && alpha_antialiasing_mode == ALPHA_ANTIALIASING_OFF) {
 				// Alpha does not write to depth.
 				depth_stencil_state.enable_depth_write = false;
 			}
@@ -514,6 +519,10 @@ void SceneShaderForwardMobile::ShaderData::_create_pipeline(PipelineKey p_pipeli
 	sc.constant_id = 3;
 	sc.bool_value = emulate_point_size_flag;
 	sc.type = RD::PIPELINE_SPECIALIZATION_CONSTANT_TYPE_BOOL;
+	specialization_constants.push_back(sc);
+
+	sc.constant_id = 4;
+	sc.bool_value = alpha_to_coverage_cutout;
 	specialization_constants.push_back(sc);
 
 	RID shader_rid = get_shader_variant(p_pipeline_key.version, p_pipeline_key.ubershader);
@@ -618,7 +627,10 @@ bool SceneShaderForwardMobile::MaterialData::update_parameters(const HashMap<Str
 	if (shader_data->version.is_valid()) {
 		RID base_shader = SceneShaderForwardMobile::singleton->shader.version_get_shader(shader_data->version, (SceneShaderForwardMobile::singleton->use_fp16 ? SHADER_VERSION_MAX * 2 : 0));
 		MutexLock lock(SceneShaderForwardMobile::singleton_mutex);
-		return update_parameters_uniform_set(p_parameters, p_uniform_dirty, p_textures_dirty, shader_data->uniforms, shader_data->ubo_offsets.ptr(), shader_data->texture_uniforms, shader_data->default_texture_params, shader_data->ubo_size, uniform_set, base_shader, RenderForwardMobile::MATERIAL_UNIFORM_SET, true, true);
+		// Mobile draw records read the current binding from this owner. A descriptor
+		// replacement changes no shader/sort/shadow properties and needs no surface rebuild.
+		update_parameters_uniform_set(p_parameters, p_uniform_dirty, p_textures_dirty, shader_data->uniforms, shader_data->ubo_offsets.ptr(), shader_data->texture_uniforms, shader_data->default_texture_params, shader_data->ubo_size, uniform_set, base_shader, RenderForwardMobile::MATERIAL_UNIFORM_SET, true, true);
+		return false;
 	} else {
 		return false;
 	}
@@ -759,6 +771,8 @@ void SceneShaderForwardMobile::init(const String p_defines) {
 		actions.renames["NORMAL_MAP_DEPTH"] = "normal_map_depth_highp";
 		actions.renames["BENT_NORMAL_MAP"] = "bent_normal_map_highp";
 		actions.renames["BENT_CONE_APERTURE"] = "bent_cone_aperture_highp";
+		actions.renames["BENT_CONE_WEIGHT"] = "bent_cone_weight_highp";
+		actions.usage_defines["BENT_CONE_APERTURE"] = "#define AMBIENT_SKY_CONE_USED\n";
 		actions.renames["ALBEDO"] = "albedo_highp";
 		actions.renames["DISPLACEMENT"] = "displacement_highp";
 		actions.usage_defines["DISPLACEMENT"] = "#define DISPLACEMENT_USED\n";
@@ -795,6 +809,7 @@ void SceneShaderForwardMobile::init(const String p_defines) {
 		actions.renames["CUSTOM2"] = "custom2_attrib";
 		actions.renames["CUSTOM3"] = "custom3_attrib";
 		actions.renames["LIGHT_VERTEX"] = "light_vertex";
+		actions.renames["DIRECTIONAL_SHADOW_FADE_DISTANCE"] = "directional_shadow_fade_distance";
 
 		actions.renames["NODE_POSITION_WORLD"] = "read_model_matrix[3].xyz";
 		actions.renames["CAMERA_POSITION_WORLD"] = "inv_view_matrix[3].xyz";
@@ -818,6 +833,8 @@ void SceneShaderForwardMobile::init(const String p_defines) {
 		actions.renames["LIGHT_AREA_SPECULAR_MULTIPLIER"] = "area_specular";
 		actions.renames["LIGHT"] = "light_highp";
 		actions.renames["ATTENUATION"] = "attenuation_highp";
+		actions.renames["WIDE_DIRECTIONAL_SHADOW"] = "(is_directional ? wide_directional_shadow : attenuation_highp)";
+		actions.usage_defines["WIDE_DIRECTIONAL_SHADOW"] = "#define USE_WIDE_DIRECTIONAL_SHADOW\n";
 		actions.renames["DIFFUSE_LIGHT"] = "diffuse_light_highp";
 		actions.renames["SPECULAR_LIGHT"] = "specular_light_highp";
 
@@ -847,6 +864,7 @@ void SceneShaderForwardMobile::init(const String p_defines) {
 		actions.usage_defines["INSTANCE_CUSTOM"] = "#define ENABLE_INSTANCE_CUSTOM\n";
 		actions.usage_defines["POSITION"] = "#define OVERRIDE_POSITION\n";
 		actions.usage_defines["LIGHT_VERTEX"] = "#define LIGHT_VERTEX_USED\n";
+		actions.usage_defines["DIRECTIONAL_SHADOW_FADE_DISTANCE"] = "#define DIRECTIONAL_SHADOW_FADE_USED\n";
 		actions.usage_defines["Z_CLIP_SCALE"] = "#define Z_CLIP_SCALE_USED\n";
 		actions.usage_defines["LIGHT_AREA_DIFFUSE_MULTIPLIER"] = "#define AREA_LIGHT_CODE_USED\n";
 		actions.usage_defines["LIGHT_AREA_SPECULAR_MULTIPLIER"] = "@LIGHT_AREA_DIFFUSE_MULTIPLIER";

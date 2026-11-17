@@ -60,7 +60,8 @@ public:
 	};
 
 	enum IndirectMultiMesh : uint32_t {
-		INDIRECT_MULTIMESH_COMMAND_STRIDE = 5
+		// Draw command, dispatch arguments, GPU root bounds and optional selection identity.
+		INDIRECT_MULTIMESH_COMMAND_STRIDE = 20
 	};
 
 private:
@@ -238,6 +239,7 @@ private:
 		bool aabb_dirty = false;
 		bool buffer_set = false;
 		bool indirect = false;
+		int mesh_lod = 0; // Zero selects base indices; -1 selects the lowest imported LOD.
 		bool motion_vectors_enabled = false;
 		uint32_t motion_vectors_current_offset = 0;
 		uint32_t motion_vectors_previous_offset = 0;
@@ -462,9 +464,9 @@ public:
 		return s->lod_count > 0;
 	}
 
-	_FORCE_INLINE_ uint32_t mesh_surface_get_vertices_drawn_count(void *p_surface) const {
+	_FORCE_INLINE_ uint32_t mesh_surface_get_vertices_drawn_count(void *p_surface, uint32_t p_lod = 0) const {
 		Mesh::Surface *s = reinterpret_cast<Mesh::Surface *>(p_surface);
-		return s->index_count ? s->index_count : s->vertex_count;
+		return p_lod > 0 ? s->lods[p_lod - 1].index_count : (s->index_count ? s->index_count : s->vertex_count);
 	}
 
 	_FORCE_INLINE_ AABB mesh_surface_get_aabb(void *p_surface) {
@@ -667,6 +669,8 @@ public:
 	virtual int _multimesh_get_instance_count(RID p_multimesh) const override;
 
 	virtual void _multimesh_set_mesh(RID p_multimesh, RID p_mesh) override;
+	virtual void multimesh_set_mesh_lod(RID p_multimesh, int p_lod) override;
+	uint32_t multimesh_surface_get_lod(RID p_multimesh, void *p_surface) const;
 	virtual void _multimesh_instance_set_transform(RID p_multimesh, int p_index, const Transform3D &p_transform) override;
 	virtual void _multimesh_instance_set_transform_2d(RID p_multimesh, int p_index, const Transform2D &p_transform) override;
 	virtual void _multimesh_instance_set_color(RID p_multimesh, int p_index, const Color &p_color) override;

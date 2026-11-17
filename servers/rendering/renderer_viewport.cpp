@@ -347,6 +347,10 @@ void RendererViewport::_draw_viewport(Viewport *p_viewport) {
 		DisplayServer::get_singleton()->gl_window_make_current(p_viewport->viewport_to_screen);
 	}
 
+	if (p_viewport->pre_draw_callback.is_valid()) {
+		p_viewport->pre_draw_callback.call();
+	}
+
 	/* Camera should always be BEFORE any other 3D */
 
 	bool can_draw_2d = !p_viewport->disable_2d && p_viewport->view_count == 1; // Stereo rendering does not support 2D, no depth data
@@ -755,6 +759,12 @@ void RendererViewport::_draw_viewport(Viewport *p_viewport) {
 	if (RSG::texture_storage->render_target_get_msaa_needs_resolve(p_viewport->render_target)) {
 		WARN_PRINT_ONCE("2D MSAA is enabled while there is no 2D content. Disable 2D MSAA for better performance.");
 		RSG::texture_storage->render_target_do_msaa_resolve(p_viewport->render_target);
+	}
+
+	// All viewport writes, including MSAA resolve, precede the dependent GPU work.
+	// A callback must preserve renderer state and may not mutate the scene tree.
+	if (p_viewport->post_draw_callback.is_valid()) {
+		p_viewport->post_draw_callback.call();
 	}
 
 	if (p_viewport->measure_render_time) {
@@ -1215,6 +1225,19 @@ RSE::ViewportUpdateMode RendererViewport::viewport_get_update_mode(RID p_viewpor
 	ERR_FAIL_NULL_V(viewport, RSE::VIEWPORT_UPDATE_DISABLED);
 
 	return viewport->update_mode;
+}
+
+void RendererViewport::viewport_set_pre_draw_callback(RID p_viewport, const Callable &p_callback) {
+	Viewport *viewport = viewport_owner.get_or_null(p_viewport);
+	ERR_FAIL_NULL(viewport);
+	viewport->pre_draw_callback = p_callback;
+}
+
+// The viewport owns its callback and bound resources until replacement or free.
+void RendererViewport::viewport_set_post_draw_callback(RID p_viewport, const Callable &p_callback) {
+	Viewport *viewport = viewport_owner.get_or_null(p_viewport);
+	ERR_FAIL_NULL(viewport);
+	viewport->post_draw_callback = p_callback;
 }
 
 RID RendererViewport::viewport_get_render_target(RID p_viewport) const {

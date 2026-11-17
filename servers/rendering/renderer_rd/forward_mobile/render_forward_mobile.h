@@ -34,6 +34,7 @@
 #include "servers/rendering/multi_uma_buffer.h"
 #include "servers/rendering/renderer_rd/forward_mobile/scene_shader_forward_mobile.h"
 #include "servers/rendering/renderer_rd/effects/ssdm.h"
+#include "servers/rendering/renderer_rd/effects/instance_visibility.h"
 #include "servers/rendering/renderer_rd/renderer_scene_render_rd.h"
 
 #define RB_SCOPE_MOBILE SNAME("mobile")
@@ -75,6 +76,10 @@ private:
 
 	SceneShaderForwardMobile scene_shader;
 	RendererRD::SSDM ssdm;
+	RendererRD::InstanceVisibility *gpu_placement_visibility = nullptr;
+	HashSet<RID> gpu_placement_prepared;
+	LocalVector<RendererRD::InstanceVisibility::Job> gpu_placement_jobs;
+	void _prepare_gpu_placement_culling(GeometryInstanceSurfaceDataCache **p_elements, uint32_t p_count, const Vector<Plane> &p_planes, uint32_t p_view = 0);
 	bool disable_ubershaders = false;
 
 	/* Render Buffer */
@@ -142,6 +147,7 @@ private:
 		RD::FramebufferFormatID framebuffer_format = 0;
 		uint32_t element_offset = 0;
 		uint32_t subpass = 0;
+		bool gpu_placement_culling = false;
 
 		RenderListParameters(GeometryInstanceSurfaceDataCache **p_elements, RenderElementInfo *p_element_info, int p_element_count, bool p_reverse_cull, PassMode p_pass_mode, RID p_render_pass_uniform_set, SceneShaderForwardMobile::ShaderSpecialization p_base_specialization, bool p_force_wireframe = false, const Vector2 &p_uv_offset = Vector2(), float p_lod_distance_multiplier = 0.0, float p_screen_mesh_lod_threshold = 0.0, uint32_t p_view_count = 1, uint32_t p_element_offset = 0) {
 			elements = p_elements;
@@ -167,9 +173,9 @@ private:
 
 	/* Render shadows */
 
-	void _render_shadow_pass(RID p_light, RID p_shadow_atlas, int p_pass, const PagedArray<RenderGeometryInstance *> &p_instances, float p_lod_distance_multiplier = 0, float p_screen_mesh_lod_threshold = 0.0, bool p_open_pass = true, bool p_close_pass = true, bool p_clear_region = true, RenderingServerTypes::RenderInfo *p_render_info = nullptr, const Transform3D &p_main_cam_transform = Transform3D());
+	void _render_shadow_pass(RID p_light, RID p_shadow_atlas, int p_pass, const PagedArray<RenderGeometryInstance *> &p_instances, float p_lod_distance_multiplier = 0, float p_screen_mesh_lod_threshold = 0.0, bool p_open_pass = true, bool p_close_pass = true, bool p_clear_region = true, RenderingServerTypes::RenderInfo *p_render_info = nullptr, const Transform3D &p_main_cam_transform = Transform3D(), const Vector<Plane> &p_caster_query = Vector<Plane>());
 	void _render_shadow_begin();
-	void _render_shadow_append(RID p_framebuffer, const PagedArray<RenderGeometryInstance *> &p_instances, const Projection &p_projection, const Transform3D &p_transform, float p_zfar, float p_bias, float p_normal_bias, bool p_use_dp, bool p_use_dp_flip, bool p_use_pancake, float p_lod_distance_multiplier = 0.0, float p_screen_mesh_lod_threshold = 0.0, const Rect2i &p_rect = Rect2i(), bool p_flip_y = false, bool p_clear_region = true, bool p_begin = true, bool p_end = true, RenderingServerTypes::RenderInfo *p_render_info = nullptr, const Transform3D &p_main_cam_transform = Transform3D());
+	void _render_shadow_append(RID p_framebuffer, const PagedArray<RenderGeometryInstance *> &p_instances, const Projection &p_projection, const Transform3D &p_transform, float p_zfar, float p_bias, float p_normal_bias, bool p_use_dp, bool p_use_dp_flip, bool p_use_pancake, float p_lod_distance_multiplier = 0.0, float p_screen_mesh_lod_threshold = 0.0, const Rect2i &p_rect = Rect2i(), bool p_flip_y = false, bool p_clear_region = true, bool p_begin = true, bool p_end = true, RenderingServerTypes::RenderInfo *p_render_info = nullptr, const Transform3D &p_main_cam_transform = Transform3D(), const Vector<Plane> &p_caster_query = Vector<Plane>());
 	void _render_shadow_process();
 	void _render_shadow_end();
 
@@ -218,6 +224,7 @@ private:
 			uint32_t base_index;
 			uint32_t multimesh_motion_vectors_current_offset;
 			uint32_t multimesh_motion_vectors_previous_offset;
+			uint32_t compact_placement_ids;
 			PushConstantUbershader ubershader;
 		};
 
@@ -310,6 +317,7 @@ private:
 		bool used_opaque_stencil = false;
 
 		struct ShadowPass {
+			Vector<Plane> gpu_culling_planes;
 			uint32_t element_from;
 			uint32_t element_count;
 			bool flip_cull;
@@ -518,12 +526,12 @@ protected:
 		uint32_t surface_index = 0;
 
 		void *surface = nullptr;
-		RID material_uniform_set;
 		SceneShaderForwardMobile::ShaderData *shader = nullptr;
 		SceneShaderForwardMobile::MaterialData *material = nullptr;
 
 		void *surface_shadow = nullptr;
-		RID material_uniform_set_shadow;
+		// Binding RIDs remain at the material owner; only structural material changes rebuild surfaces.
+		SceneShaderForwardMobile::MaterialData *material_shadow = nullptr;
 		SceneShaderForwardMobile::ShaderData *shader_shadow = nullptr;
 
 		GeometryInstanceSurfaceDataCache *next = nullptr;
@@ -540,6 +548,7 @@ protected:
 	public:
 		//used during rendering
 		RID transforms_uniform_set;
+		RendererRD::InstanceVisibility::BindingCache gpu_placement_bindings;
 		bool use_projector = false;
 		bool use_soft_shadow = false;
 		bool store_transform_cache = true; // If true we copy our transform into our per-draw buffer, if false we use our transforms UBO and clear our per-draw transform.

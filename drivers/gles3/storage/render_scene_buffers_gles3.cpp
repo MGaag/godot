@@ -629,7 +629,19 @@ void RenderSceneBuffersGLES3::_clear_glow_buffers() {
 	}
 }
 
+// Discard derived shadow history together with its owning view resources.
+void RenderSceneBuffersGLES3::clear_shadow_history() {
+	if (shadow_history.fbo) {
+		glDeleteFramebuffers(1, &shadow_history.fbo);
+	}
+	if (shadow_history.depth) {
+		GLES3::Utilities::get_singleton()->texture_free_data(shadow_history.depth);
+	}
+	shadow_history = ShadowHistory();
+}
+
 void RenderSceneBuffersGLES3::free_render_buffer_data() {
+	clear_shadow_history();
 	_clear_msaa3d_buffers();
 	_clear_intermediate_buffers();
 	_clear_back_buffers();

@@ -219,6 +219,17 @@ void Utilities::visibility_notifier_call(RID p_notifier, bool p_enter, bool p_de
 
 /* TIMING */
 
+// The public pipeline-profiler switch is also the sole owner of hardware counters.
+void Utilities::_set_pipeline_draw_statistics_enabled(bool p_enabled) {
+	RD::get_singleton()->set_draw_statistics_enabled(p_enabled);
+}
+
+// Use the GPU-frame selection even for raster work recorded before scene rendering.
+bool Utilities::_pipeline_profile_frame_active() {
+	RD *rd = RD::get_singleton();
+	return rd->is_draw_statistics_supported() ? rd->is_draw_statistics_frame_active() : RendererUtilities::_pipeline_profile_frame_active();
+}
+
 void Utilities::capture_timestamps_begin() {
 	RD::get_singleton()->capture_timestamp("Frame Begin");
 }

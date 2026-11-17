@@ -30,6 +30,8 @@
 
 #include "renderer_canvas_render_rd.h"
 
+#include "main/frame_cpu_profile.h"
+
 #include "core/config/engine.h"
 #include "core/config/project_settings.h"
 #include "core/math/geometry_2d.h"
@@ -42,6 +44,8 @@
 #include "servers/rendering/renderer_rd/storage_rd/particles_storage.h"
 #include "servers/rendering/renderer_rd/storage_rd/texture_storage.h"
 #include "servers/rendering/rendering_server_default.h"
+
+// Records and draws canvas batches; optional contiguous-owner GPU scopes preserve production batching and report mixed batches explicitly. RenderingDevice owns asynchronous queries.
 
 void RendererCanvasRenderRD::_update_transform_2d_to_mat4(const Transform2D &p_transform, float *p_mat4) {
 	p_mat4[0] = p_transform.columns[0][0];
@@ -507,6 +511,7 @@ RID RendererCanvasRenderRD::_get_pipeline_specialization_or_ubershader(CanvasSha
 }
 
 void RendererCanvasRenderRD::canvas_render_items(RID p_to_render_target, Item *p_item_list, const Color &p_modulate, Light *p_light_list, Light *p_directional_light_list, const Transform2D &p_canvas_transform, RSE::CanvasItemTextureFilter p_default_filter, RSE::CanvasItemTextureRepeat p_default_repeat, bool p_snap_2d_vertices_to_pixel, bool &r_sdf_used, RenderingServerTypes::RenderInfo *r_render_info) {
+	FrameCPUProfile::Scope cpu_phase("Canvas draw generation");
 	RendererRD::TextureStorage *texture_storage = RendererRD::TextureStorage::get_singleton();
 	RendererRD::MaterialStorage *material_storage = RendererRD::MaterialStorage::get_singleton();
 	RendererRD::MeshStorage *mesh_storage = RendererRD::MeshStorage::get_singleton();
@@ -2185,6 +2190,7 @@ uint32_t RendererCanvasRenderRD::get_pipeline_compilations(RSE::PipelineSource p
 }
 
 void RendererCanvasRenderRD::_render_batch_items(RenderTarget p_to_render_target, int p_item_count, const Transform2D &p_canvas_transform_inverse, Light *p_lights, bool &r_sdf_used, bool p_to_backbuffer, RenderingServerTypes::RenderInfo *r_render_info) {
+	const bool profiling = RSG::utilities->pipeline_profiling_active;
 	// Record batches
 	{
 		RendererRD::MaterialStorage *material_storage = RendererRD::MaterialStorage::get_singleton();
@@ -2232,6 +2238,9 @@ void RendererCanvasRenderRD::_render_batch_items(RenderTarget p_to_render_target
 				current_batch->material_data = material_data;
 			}
 
+			// Track every resulting batch without changing the production batch boundaries.
+			uint32_t first_profile_batch = state.current_batch_index;
+			uint32_t first_profile_instances = current_batch->instance_count;
 			if (ci->repeat_source_item == nullptr || ci->repeat_size == Vector2()) {
 				Transform2D base_transform = p_canvas_transform_inverse * ci->final_transform;
 				_record_item_commands(ci, p_to_render_target, base_transform, current_clip, p_lights, batch_broken, r_sdf_used, current_batch);
@@ -2249,6 +2258,20 @@ void RendererCanvasRenderRD::_render_batch_items(RenderTarget p_to_render_target
 						base_transform = p_canvas_transform_inverse * base_transform;
 						_record_item_commands(ci, p_to_render_target, base_transform, current_clip, p_lights, batch_broken, r_sdf_used, current_batch);
 					}
+				}
+			}
+			if (profiling) {
+				for (uint32_t batch_index = first_profile_batch; batch_index <= state.current_batch_index; batch_index++) {
+					Batch &batch = state.canvas_instance_batches[batch_index];
+					if (batch.instance_count == 0 || (batch_index == first_profile_batch && batch.instance_count == first_profile_instances)) {
+						continue;
+					}
+					if (batch.profile_label_assigned && batch.profile_label != ci->profile_label) {
+						batch.profile_label = StringName("Mixed canvas batch");
+					} else {
+						batch.profile_label = ci->profile_label;
+					}
+					batch.profile_label_assigned = true;
 				}
 			}
 		}
@@ -2300,12 +2323,20 @@ void RendererCanvasRenderRD::_render_batch_items(RenderTarget p_to_render_target
 
 	Item *current_clip = nullptr;
 	state.current_batch_uniform_set = RID();
+	StringName profile_label; // Current contiguous diagnostic group, not a draw-state key.
 
 	for (uint32_t i = 0; i <= state.current_batch_index; i++) {
 		Batch *current_batch = &state.canvas_instance_batches[i];
 		// Skipping when there is no instances.
 		if (current_batch->instance_count == 0) {
 			continue;
+		}
+		if (profiling && current_batch->profile_label != profile_label) {
+			RD::get_singleton()->draw_list_end_profile();
+			profile_label = current_batch->profile_label;
+			if (profile_label != StringName()) {
+				RD::get_singleton()->draw_list_begin_profile(profile_label);
+			}
 		}
 
 		//setup clip
@@ -3280,6 +3311,8 @@ RendererCanvasRenderRD::Batch *RendererCanvasRenderRD::_new_batch(bool &r_batch_
 
 	// Copy the properties of the current batch, we will manually update the things that changed.
 	Batch new_batch = state.canvas_instance_batches[state.current_batch_index];
+	new_batch.profile_label = StringName();
+	new_batch.profile_label_assigned = false;
 	new_batch.instance_count = 0;
 	new_batch.start = state.instance_data_index;
 	memset(&new_batch.push_data, 0, sizeof(new_batch.push_data));

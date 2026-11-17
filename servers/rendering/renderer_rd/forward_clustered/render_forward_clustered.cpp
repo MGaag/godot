@@ -42,6 +42,8 @@
 #include "servers/rendering/rendering_server_default.h"
 #include "servers/rendering/storage/ltc_lut.gen.h"
 
+// Owns Forward+ scene rendering; optional ownership scopes preserve instanced repeat batches and report mixed owners. SceneCull supplies labels and RenderingDevice owns queries.
+
 using namespace RendererSceneRenderImplementation;
 
 #define PRELOAD_PIPELINES_ON_SURFACE_CACHE_CONSTRUCTION 1
@@ -304,6 +306,8 @@ void RenderForwardClustered::update() {
 
 template <RenderForwardClustered::PassMode p_pass_mode, uint32_t p_color_pass_flags>
 void RenderForwardClustered::_render_list_template(RenderingDevice::DrawListID p_draw_list, RenderingDevice::FramebufferFormatID p_framebuffer_Format, RenderListParameters *p_params, uint32_t p_from_element, uint32_t p_to_element) {
+	const bool profiling = RSG::utilities->pipeline_profiling_active;
+	StringName profile_label; // Diagnostic grouping never participates in instance-repeat decisions.
 	RendererRD::MeshStorage *mesh_storage = RendererRD::MeshStorage::get_singleton();
 	RendererRD::ParticlesStorage *particles_storage = RendererRD::ParticlesStorage::get_singleton();
 	RD::DrawListID draw_list = p_draw_list;
@@ -362,6 +366,10 @@ void RenderForwardClustered::_render_list_template(RenderingDevice::DrawListID p
 			material_uniform_set = surf->material_uniform_set_shadow;
 			shader = surf->shader_shadow;
 			mesh_surface = surf->surface_shadow;
+			// Fixed indirect counts refer to the source surface, not a welded shadow mesh.
+			if ((surf->owner->base_flags & INSTANCE_DATA_FLAG_MULTIMESH_INDIRECT) && mesh_storage->multimesh_surface_get_lod(surf->owner->data->base, surf->surface) > 0) {
+				mesh_surface = surf->surface;
+			}
 
 		} else {
 #ifdef DEBUG_ENABLED
@@ -540,7 +548,7 @@ void RenderForwardClustered::_render_list_template(RenderingDevice::DrawListID p
 
 		if (pipeline_valid) {
 			if (!emulate_point_size) {
-				index_array_rd = mesh_storage->mesh_surface_get_index_array(mesh_surface, element_info.lod_index);
+				index_array_rd = mesh_storage->mesh_surface_get_index_array(mesh_surface, (surf->owner->base_flags & INSTANCE_DATA_FLAG_MULTIMESH_INDIRECT) ? mesh_storage->multimesh_surface_get_lod(surf->owner->data->base, mesh_surface) : element_info.lod_index);
 			} else {
 				index_array_rd = RID();
 			}
@@ -597,6 +605,23 @@ void RenderForwardClustered::_render_list_template(RenderingDevice::DrawListID p
 			RD::get_singleton()->draw_list_set_push_constant(draw_list, &push_constant, push_constant_size);
 
 			uint32_t instance_count = surf->owner->instance_count > 1 ? surf->owner->instance_count : element_info.repeat;
+			if (profiling && p_pass_mode == PASS_MODE_COLOR) {
+				StringName label = surf->owner->profile_label;
+				// One instanced draw can contain multiple owners; report it honestly without splitting it.
+				for (uint32_t repeat = 1; repeat < element_info.repeat; repeat++) {
+					if (p_params->elements[i + repeat]->owner->profile_label != label) {
+						label = StringName("Mixed geometry batch");
+						break;
+					}
+				}
+				if (profile_label != label) {
+					RD::get_singleton()->draw_list_end_profile();
+					profile_label = label;
+					if (label != StringName()) {
+						RD::get_singleton()->draw_list_begin_profile(label);
+					}
+				}
+			}
 			if (surf->flags & GeometryInstanceSurfaceDataCache::FLAG_USES_PARTICLE_TRAILS) {
 				instance_count /= surf->owner->trail_steps;
 			}
@@ -618,6 +643,9 @@ void RenderForwardClustered::_render_list_template(RenderingDevice::DrawListID p
 		i += element_info.repeat - 1; //skip equal elements
 	}
 
+	if (profiling) {
+		RD::get_singleton()->draw_list_end_profile();
+	}
 	// Make the actual redraw request
 	if (should_request_redraw) {
 		RenderingServerDefault::redraw_request();

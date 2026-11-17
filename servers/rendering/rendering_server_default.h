@@ -44,6 +44,8 @@
 #include "servers/rendering/rendering_server_types.h"
 #include "servers/server_wrap_mt_common.h"
 
+// Dispatches rendering work and queued APIs; detailed pipeline profiling shares one frame cadence across backends. RendererUtilities owns its transient enablement.
+
 class RenderingServerDefault : public RenderingServer {
 	GDSOFTCLASS(RenderingServerDefault, RenderingServer);
 
@@ -435,6 +437,7 @@ public:
 	FUNC1RC(int, multimesh_get_instance_count, RID)
 
 	FUNC2(multimesh_set_mesh, RID, RID)
+	FUNC2(multimesh_set_mesh_lod, RID, int)
 	FUNC3(multimesh_instance_set_transform, RID, int, const Transform3D &)
 	FUNC3(multimesh_instance_set_transform_2d, RID, int, const Transform2D &)
 	FUNC3(multimesh_instance_set_color, RID, int, const Color &)
@@ -774,6 +777,8 @@ public:
 	FUNC2(viewport_set_update_mode, RID, RSE::ViewportUpdateMode)
 	FUNC1RC(RSE::ViewportUpdateMode, viewport_get_update_mode, RID)
 
+	FUNC2(viewport_set_pre_draw_callback, RID, const Callable &)
+	FUNC2(viewport_set_post_draw_callback, RID, const Callable &)
 	FUNC1RC(RID, viewport_get_render_target, RID)
 	FUNC1RC(RID, viewport_get_texture, RID)
 
@@ -858,6 +863,7 @@ public:
 	FUNC2(sky_set_mode, RID, RSE::SkyMode)
 	FUNC2(sky_set_material, RID, RID)
 	FUNC4R(Ref<Image>, sky_bake_panorama, RID, float, bool, const Size2i &)
+	FUNC1R(RID, sky_get_cosine_cone_texture_rd, RID)
 
 	/* ENVIRONMENT */
 
@@ -947,6 +953,8 @@ public:
 
 	FUNCRIDSPLIT(scenario)
 
+	FUNC2(scenario_set_shadow_receiver_height_range, RID, const Vector2 &)
+	FUNC3(scenario_set_shadow_caster_query, RID, bool, float)
 	FUNC2(scenario_set_environment, RID, RID)
 	FUNC2(scenario_set_camera_attributes, RID, RID)
 	FUNC2(scenario_set_fallback_environment, RID, RID)
@@ -975,6 +983,8 @@ public:
 	FUNC2(instance_set_visibility_parent, RID, RID)
 
 	FUNC2(instance_set_ignore_culling, RID, bool)
+	FUNC2(instance_set_profile_label, RID, const StringName &)
+	FUNC6(instance_set_gpu_placement_culling, RID, RID, RID, const Vector4 &, float, float)
 
 	// don't use these in a game!
 	FUNC2RC(Vector<ObjectID>, instances_cull_aabb, const AABB &, RID)
@@ -1032,6 +1042,7 @@ public:
 	FUNC2(canvas_item_set_light_mask, RID, int)
 
 	FUNC2(canvas_item_set_visibility_layer, RID, uint32_t)
+	FUNC2(canvas_item_set_profile_label, RID, const StringName &)
 
 	FUNC2(canvas_item_set_update_when_visible, RID, bool)
 
@@ -1184,6 +1195,7 @@ public:
 #define ServerName RendererUtilities
 #define server_name RSG::utilities
 	FUNC0RC(String, get_video_adapter_name)
+	FUNC1(set_pipeline_profiling_enabled, bool)
 	FUNC0RC(String, get_video_adapter_vendor)
 	FUNC0RC(String, get_video_adapter_api_version)
 #undef server_name

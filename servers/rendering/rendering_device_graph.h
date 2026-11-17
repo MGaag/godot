@@ -36,6 +36,8 @@
 
 #ifdef DEV_ENABLED
 #include "core/templates/rb_map.h"
+
+// Records and schedules device command streams; in-pass timestamp instructions retain draw batching and render-pass lifetime. RenderingDevice owns query pools and readback.
 #endif
 
 // Buffer barriers have not shown any significant improvement or shown to be
@@ -79,6 +81,9 @@ public:
 		enum Type {
 			TYPE_NONE,
 			TYPE_BIND_INDEX_BUFFER,
+			TYPE_PRIMITIVE_QUERY_BEGIN,
+			TYPE_PRIMITIVE_QUERY_END,
+			TYPE_CAPTURE_TIMESTAMP,
 			TYPE_BIND_PIPELINE,
 			TYPE_BIND_UNIFORM_SETS,
 			TYPE_BIND_VERTEX_BUFFERS,
@@ -176,6 +181,7 @@ public:
 		RESOURCE_USAGE_GENERAL,
 		RESOURCE_USAGE_ACCELERATION_STRUCTURE_READ,
 		RESOURCE_USAGE_ACCELERATION_STRUCTURE_READ_WRITE,
+		RESOURCE_USAGE_STORAGE_INDIRECT_BUFFER_READ,
 		RESOURCE_USAGE_MAX
 	};
 
@@ -194,6 +200,7 @@ public:
 		int32_t compute_list_index = -1;
 		int32_t raytracing_list_index = -1;
 		ResourceUsage compute_list_usage = RESOURCE_USAGE_NONE;
+		uint32_t compute_list_usage_index = 0;
 		ResourceUsage raytracing_list_usage = RESOURCE_USAGE_NONE;
 		ResourceUsage usage = RESOURCE_USAGE_NONE;
 		BitField<RDD::BarrierAccessBits> usage_access = {};
@@ -548,6 +555,18 @@ private:
 		RDD::BufferID buffer;
 		RenderingDeviceCommons::IndexBufferFormat format;
 		uint32_t offset = 0;
+	};
+
+	// Hardware counts retain the actual GPU command order without splitting passes.
+	struct DrawListPrimitiveQueryInstruction : DrawListInstruction {
+		RDD::QueryPoolID pool; // Frame-owned scalar counter pool.
+		uint32_t index; // One complete begin/end scope uses this query slot.
+	};
+
+	// In-pass queries preserve render-pass lifetime and existing draw batching.
+	struct DrawListCaptureTimestampInstruction : DrawListInstruction {
+		RDD::QueryPoolID pool; // Frame-owned pool; readback remains asynchronous.
+		uint32_t index; // Reserved query slot for this marker.
 	};
 
 	struct DrawListBindPipelineInstruction : DrawListInstruction {
@@ -951,6 +970,10 @@ public:
 	void add_texture_resolve(RDD::TextureID p_src, ResourceTracker *p_src_tracker, RDD::TextureID p_dst, ResourceTracker *p_dst_tracker, uint32_t p_src_layer, uint32_t p_src_mipmap, uint32_t p_dst_layer, uint32_t p_dst_mipmap);
 	void add_texture_update(RDD::TextureID p_dst, ResourceTracker *p_dst_tracker, VectorView<RecordedBufferToTextureCopy> p_buffer_copies, VectorView<ResourceTracker *> p_buffer_trackers = VectorView<ResourceTracker *>());
 	void add_capture_timestamp(RDD::QueryPoolID p_query_pool, uint32_t p_index);
+	// Records a timestamp in the current draw stream, without a graph barrier.
+	// Begin or end a counter in the same command stream as the submitted geometry.
+	void add_draw_list_primitive_query(RDD::QueryPoolID p_query_pool, uint32_t p_index, bool p_begin);
+	void add_draw_list_capture_timestamp(RDD::QueryPoolID p_query_pool, uint32_t p_index);
 	void add_synchronization();
 	void begin_label(const Span<char> &p_label_name, const Color &p_color);
 	void end_label();

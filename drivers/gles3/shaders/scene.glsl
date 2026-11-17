@@ -276,6 +276,15 @@ struct DirectionalShadowData {
 	mediump float fade_from;
 	mediump float fade_to;
 	mediump vec2 pad;
+	highp mat4 history_matrices[4];
+	highp vec4 history_rects[4];
+	highp vec4 history_bias;
+	highp vec3 history_direction;
+	highp float history_weight;
+	highp vec4 depth_decode[4];
+	highp vec4 history_camera_depth;
+	highp vec4 history_splits;
+	highp vec4 history_depth_tolerance;
 };
 
 layout(std140) uniform DirectionalShadows { // ubo:11
@@ -1275,6 +1284,11 @@ layout(std140) uniform DirectionalLights { // ubo:8
 #if defined(USE_ADDITIVE_LIGHTING) && (!defined(ADDITIVE_OMNI) && !defined(ADDITIVE_SPOT))
 // Directional shadows can be in the base pass or in the additive passes
 uniform highp sampler2DShadow directional_shadow_atlas; // texunit:-3
+uniform highp sampler2DShadow directional_shadow_history; // texunit:-1
+#ifndef USE_LIGHTMAP
+uniform highp sampler2D directional_depth_current; // texunit:-4
+uniform highp sampler2D directional_depth_history; // texunit:-5
+#endif
 #endif // defined(USE_ADDITIVE_LIGHTING) && (!defined(ADDITIVE_OMNI) && !defined(ADDITIVE_SPOT))
 
 #endif // !DISABLE_LIGHT_DIRECTIONAL || USE_SUN_SCATTER
@@ -1376,6 +1390,15 @@ struct DirectionalShadowData {
 	mediump float fade_from;
 	mediump float fade_to;
 	mediump vec2 pad;
+	highp mat4 history_matrices[4];
+	highp vec4 history_rects[4];
+	highp vec4 history_bias;
+	highp vec3 history_direction;
+	highp float history_weight;
+	highp vec4 depth_decode[4];
+	highp vec4 history_camera_depth;
+	highp vec4 history_splits;
+	highp vec4 history_depth_tolerance;
 };
 
 layout(std140) uniform DirectionalShadows { // ubo:11
@@ -2273,6 +2296,7 @@ void main() {
 	// Accepted for material portability. Cell-light probes are RD Mobile-only,
 	// so Compatibility intentionally ignores the authored aperture value.
 	float bent_cone_aperture = 0.0;
+	float bent_cone_weight = 1.0;
 
 	vec2 screen_uv = gl_FragCoord.xy * scene_data_block.data.screen_pixel_size;
 
@@ -2294,6 +2318,10 @@ void main() {
 #ifdef LIGHT_VERTEX_USED
 	vec3 light_vertex = vertex;
 #endif //LIGHT_VERTEX_USED
+
+#ifdef DIRECTIONAL_SHADOW_FADE_USED
+	float directional_shadow_fade_distance = 0.0;
+#endif
 
 	highp mat3 model_normal_matrix;
 	if (bool(model_flags & uint(FLAGS_NON_UNIFORM_SCALE))) {
@@ -2940,6 +2968,75 @@ void main() {
 		}
 
 #endif //LIGHT_USE_PSSM4
+
+		// Compare raw occluder depths in world light-axis metres, not visibility values.
+		// A cross-shaped depth neighbourhood admits texel-boundary aliasing while rejecting
+		// unmatched blocker changes. Only the immediately prior comparison result is blended.
+#ifndef USE_LIGHTMAP
+		if (directional_shadows[directional_shadow_index].history_weight > 0.0) {
+			int current_cascade = 0;
+			vec4 current_coord = shadow_coord;
+#if defined(LIGHT_USE_PSSM2) || defined(LIGHT_USE_PSSM4)
+			if (-vertex_interp.z >= directional_shadows[directional_shadow_index].shadow_split_offsets.x) {
+				current_cascade = 1;
+				current_coord = shadow_coord2;
+			}
+#endif
+#ifdef LIGHT_USE_PSSM4
+			if (-vertex_interp.z >= directional_shadows[directional_shadow_index].shadow_split_offsets.y) {
+				current_cascade = 2;
+				current_coord = shadow_coord3;
+			}
+			if (-vertex_interp.z >= directional_shadows[directional_shadow_index].shadow_split_offsets.z) {
+				current_cascade = 3;
+				current_coord = shadow_coord4;
+			}
+#endif
+			vec3 current_uvz = current_coord.xyz / current_coord.w;
+			float prior_camera_depth = dot(directional_shadows[directional_shadow_index].history_camera_depth, vec4(vertex_interp, 1.0));
+			for (int cascade = 0; cascade < 4; cascade++) {
+				if (cascade < 3 && prior_camera_depth >= directional_shadows[directional_shadow_index].history_splits[cascade]) {
+					continue;
+				}
+				float nb = directional_shadows[directional_shadow_index].history_bias[cascade];
+				vec3 light_dir = directional_shadows[directional_shadow_index].history_direction;
+				vec3 offset = normalize(normal_interp) * nb * (1.0 - max(0.0, dot(light_dir, -normalize(normal_interp))));
+				vec4 prior = directional_shadows[directional_shadow_index].history_matrices[cascade] * vec4(vertex_interp + offset, 1.0);
+				vec3 coord = prior.xyz / prior.w;
+				vec4 bounds = directional_shadows[directional_shadow_index].history_rects[cascade];
+				float pixel_size = directional_shadows[directional_shadow_index].shadow_atlas_pixel_size;
+				float guard = 3.0 * pixel_size;
+				if (all(greaterThan(coord.xy, bounds.xy + guard)) && all(lessThan(coord.xy, bounds.zw - guard)) && coord.z > 0.0 && coord.z < 1.0) {
+					vec2 decode_current = directional_shadows[directional_shadow_index].depth_decode[current_cascade].xy;
+					vec2 decode_prior = directional_shadows[directional_shadow_index].depth_decode[cascade].zw;
+					float center_current = textureLod(directional_depth_current, current_uvz.xy, 0.0).r;
+					float center_prior = textureLod(directional_depth_history, coord.xy, 0.0).r;
+					float disagreement = 1e20;
+					for (int tap = 0; tap < 5; tap++) {
+						vec2 delta = vec2(0.0);
+						if (tap == 1) delta.x = pixel_size;
+						if (tap == 2) delta.x = -pixel_size;
+						if (tap == 3) delta.y = pixel_size;
+						if (tap == 4) delta.y = -pixel_size;
+						float current_depth = textureLod(directional_depth_current, current_uvz.xy + delta, 0.0).r;
+						float prior_depth = textureLod(directional_depth_history, coord.xy + delta, 0.0).r;
+						float d1 = abs(center_current * decode_current.x + decode_current.y - (prior_depth * decode_prior.x + decode_prior.y));
+						float d2 = abs(current_depth * decode_current.x + decode_current.y - (center_prior * decode_prior.x + decode_prior.y));
+						if ((center_current == 0.0 && prior_depth == 0.0) || (current_depth == 0.0 && center_prior == 0.0)) {
+							disagreement = 0.0;
+						} else {
+							disagreement = min(disagreement, min(d1, d2));
+						}
+					}
+					float tolerance = max(directional_shadows[directional_shadow_index].history_depth_tolerance[current_cascade], directional_shadows[directional_shadow_index].history_depth_tolerance[cascade]);
+					float confidence = 1.0 - smoothstep(tolerance, tolerance * 2.0, disagreement);
+					float previous = sample_shadow(directional_shadow_history, pixel_size, prior);
+					directional_shadow = mix(directional_shadow, previous, directional_shadows[directional_shadow_index].history_weight * confidence);
+				}
+				break;
+			}
+		}
+#endif // !USE_LIGHTMAP
 
 #ifdef USE_LIGHTMAP
 		if (lightmap_shadowmask_mode == SHADOWMASK_MODE_REPLACE) {

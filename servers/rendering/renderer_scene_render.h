@@ -81,6 +81,8 @@ public:
 	virtual void sky_set_mode(RID p_sky, RSE::SkyMode p_samples) = 0;
 	virtual void sky_set_material(RID p_sky, RID p_material) = 0;
 	virtual Ref<Image> sky_bake_panorama(RID p_sky, float p_energy, bool p_bake_irradiance, const Size2i &p_size) = 0;
+	// Non-RD backends expose no cosine-convolution resource.
+	virtual RID sky_get_cosine_cone_texture_rd(RID) { return RID(); }
 
 	/* COMPOSITOR EFFECT API */
 
@@ -286,6 +288,7 @@ public:
 	virtual void voxel_gi_set_quality(RSE::VoxelGIQuality) = 0;
 
 	struct RenderShadowData {
+		Vector<Plane> caster_query_planes;
 		RID light;
 		int pass = 0;
 		PagedArray<RenderGeometryInstance *> instances;

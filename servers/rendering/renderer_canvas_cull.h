@@ -37,6 +37,8 @@
 #include "servers/rendering/rendering_server_enums.h"
 #include "servers/rendering/rendering_server_types.h"
 
+// Owns canvas-tree submission; diagnostic item labels feed RD batch profiling without changing culling. Canvas drawing remains in RendererCanvasRender.
+
 class RendererCanvasCull {
 	static void _dependency_changed(Dependency::DependencyChangedNotification p_notification, DependencyTracker *p_tracker);
 	static void _dependency_deleted(const RID &p_dependency, DependencyTracker *p_tracker);
@@ -243,6 +245,8 @@ public:
 	void canvas_item_set_light_mask(RID p_item, int p_mask);
 
 	void canvas_item_set_visibility_layer(RID p_item, uint32_t p_layer);
+	// Assigns a diagnostic label without invalidating draw commands or material state.
+	void canvas_item_set_profile_label(RID p_item, const StringName &p_label);
 	uint32_t canvas_item_get_visibility_layer(RID p_item);
 
 	void canvas_item_set_transform(RID p_item, const Transform2D &p_transform);

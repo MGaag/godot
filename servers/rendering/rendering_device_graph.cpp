@@ -30,6 +30,8 @@
 
 #include "rendering_device_graph.h"
 
+// Records and schedules device command streams; in-pass timestamp instructions retain draw batching and render-pass lifetime. RenderingDevice owns query pools and readback.
+
 #define PRINT_RENDER_GRAPH 0
 #define FORCE_FULL_ACCESS_BITS 0
 #define PRINT_RESOURCE_TRACKER_TOTAL 0
@@ -62,6 +64,8 @@ String RenderingDeviceGraph::_usage_to_string(ResourceUsage p_usage) {
 			return "Uniform Buffer Read";
 		case RESOURCE_USAGE_INDIRECT_BUFFER_READ:
 			return "Indirect Buffer Read";
+		case RESOURCE_USAGE_STORAGE_INDIRECT_BUFFER_READ:
+			return "Storage and Indirect Buffer Read";
 		case RESOURCE_USAGE_TEXTURE_BUFFER_READ:
 			return "Texture Buffer Read";
 		case RESOURCE_USAGE_TEXTURE_BUFFER_READ_WRITE:
@@ -97,6 +101,7 @@ bool RenderingDeviceGraph::_is_write_usage(ResourceUsage p_usage) {
 		case RESOURCE_USAGE_RESOLVE_FROM:
 		case RESOURCE_USAGE_UNIFORM_BUFFER_READ:
 		case RESOURCE_USAGE_INDIRECT_BUFFER_READ:
+		case RESOURCE_USAGE_STORAGE_INDIRECT_BUFFER_READ:
 		case RESOURCE_USAGE_TEXTURE_BUFFER_READ:
 		case RESOURCE_USAGE_STORAGE_BUFFER_READ:
 		case RESOURCE_USAGE_VERTEX_BUFFER_READ:
@@ -175,6 +180,8 @@ RDD::BarrierAccessBits RenderingDeviceGraph::_usage_to_access_bits(ResourceUsage
 			return RDD::BARRIER_ACCESS_UNIFORM_READ_BIT;
 		case RESOURCE_USAGE_INDIRECT_BUFFER_READ:
 			return RDD::BARRIER_ACCESS_INDIRECT_COMMAND_READ_BIT;
+		case RESOURCE_USAGE_STORAGE_INDIRECT_BUFFER_READ:
+			return RDD::BarrierAccessBits(RDD::BARRIER_ACCESS_INDIRECT_COMMAND_READ_BIT | RDD::BARRIER_ACCESS_SHADER_READ_BIT);
 		case RESOURCE_USAGE_ACCELERATION_STRUCTURE_READ:
 			return RDD::BARRIER_ACCESS_ACCELERATION_STRUCTURE_READ_BIT;
 		case RESOURCE_USAGE_STORAGE_BUFFER_READ:
@@ -950,6 +957,21 @@ void RenderingDeviceGraph::_run_draw_list_command(RDD::CommandBufferID p_command
 				const DrawListBindIndexBufferInstruction *bind_index_buffer_instruction = reinterpret_cast<const DrawListBindIndexBufferInstruction *>(instruction);
 				driver->command_render_bind_index_buffer(p_command_buffer, bind_index_buffer_instruction->buffer, bind_index_buffer_instruction->format, bind_index_buffer_instruction->offset);
 				instruction_data_cursor += sizeof(DrawListBindIndexBufferInstruction);
+			} break;
+			case DrawListInstruction::TYPE_PRIMITIVE_QUERY_BEGIN:
+			case DrawListInstruction::TYPE_PRIMITIVE_QUERY_END: {
+				const DrawListPrimitiveQueryInstruction *query = reinterpret_cast<const DrawListPrimitiveQueryInstruction *>(instruction);
+				if (instruction->type == DrawListInstruction::TYPE_PRIMITIVE_QUERY_BEGIN) {
+					driver->command_primitive_query_begin(p_command_buffer, query->pool, query->index);
+				} else {
+					driver->command_primitive_query_end(p_command_buffer, query->pool, query->index);
+				}
+				instruction_data_cursor += sizeof(DrawListPrimitiveQueryInstruction);
+			} break;
+			case DrawListInstruction::TYPE_CAPTURE_TIMESTAMP: {
+				const DrawListCaptureTimestampInstruction *timestamp = reinterpret_cast<const DrawListCaptureTimestampInstruction *>(instruction);
+				driver->command_timestamp_write(p_command_buffer, timestamp->pool, timestamp->index);
+				instruction_data_cursor += sizeof(DrawListCaptureTimestampInstruction);
 			} break;
 			case DrawListInstruction::TYPE_BIND_PIPELINE: {
 				const DrawListBindPipelineInstruction *bind_pipeline_instruction = reinterpret_cast<const DrawListBindPipelineInstruction *>(instruction);
@@ -2107,10 +2129,19 @@ void RenderingDeviceGraph::add_compute_list_usage(ResourceTracker *p_tracker, Re
 	p_tracker->reset_if_outdated(tracking_frame);
 
 	if (p_tracker->compute_list_index != compute_instruction_list.index) {
+		p_tracker->compute_list_usage_index = compute_instruction_list.command_trackers.size();
 		compute_instruction_list.command_trackers.push_back(p_tracker);
 		compute_instruction_list.command_tracker_usages.push_back(p_usage);
 		p_tracker->compute_list_index = compute_instruction_list.index;
 		p_tracker->compute_list_usage = p_usage;
+	}
+	else if ((p_usage == RESOURCE_USAGE_INDIRECT_BUFFER_READ && p_tracker->compute_list_usage == RESOURCE_USAGE_STORAGE_BUFFER_READ) ||
+			(p_usage == RESOURCE_USAGE_STORAGE_BUFFER_READ && p_tracker->compute_list_usage == RESOURCE_USAGE_INDIRECT_BUFFER_READ) ||
+			(p_tracker->compute_list_usage == RESOURCE_USAGE_STORAGE_INDIRECT_BUFFER_READ && (p_usage == RESOURCE_USAGE_STORAGE_BUFFER_READ || p_usage == RESOURCE_USAGE_INDIRECT_BUFFER_READ))) {
+		// GPU-authored dispatch arguments may also be read as shader data.
+		// Both accesses must participate in the barrier from their producer.
+		p_tracker->compute_list_usage = RESOURCE_USAGE_STORAGE_INDIRECT_BUFFER_READ;
+		compute_instruction_list.command_tracker_usages[p_tracker->compute_list_usage_index] = RESOURCE_USAGE_STORAGE_INDIRECT_BUFFER_READ;
 	}
 #ifdef DEV_ENABLED
 	else if (p_tracker->compute_list_usage != p_usage) {
@@ -2561,6 +2592,22 @@ void RenderingDeviceGraph::add_texture_update(RDD::TextureID p_dst, ResourceTrac
 		ResourceUsage usage = RESOURCE_USAGE_COPY_TO;
 		_add_command_to_graph(&p_dst_tracker, &usage, 1, command_index, command);
 	}
+}
+
+// Record hardware counters beside draws, preserving their pass and batching.
+void RenderingDeviceGraph::add_draw_list_primitive_query(RDD::QueryPoolID p_query_pool, uint32_t p_index, bool p_begin) {
+	DrawListPrimitiveQueryInstruction *instruction = reinterpret_cast<DrawListPrimitiveQueryInstruction *>(_allocate_draw_list_instruction(sizeof(DrawListPrimitiveQueryInstruction)));
+	instruction->type = p_begin ? DrawListInstruction::TYPE_PRIMITIVE_QUERY_BEGIN : DrawListInstruction::TYPE_PRIMITIVE_QUERY_END;
+	instruction->pool = p_query_pool;
+	instruction->index = p_index;
+}
+
+// Inserts profiling markers into existing passes instead of splitting or synchronizing them.
+void RenderingDeviceGraph::add_draw_list_capture_timestamp(RDD::QueryPoolID p_query_pool, uint32_t p_index) {
+	DrawListCaptureTimestampInstruction *instruction = reinterpret_cast<DrawListCaptureTimestampInstruction *>(_allocate_draw_list_instruction(sizeof(DrawListCaptureTimestampInstruction)));
+	instruction->type = DrawListInstruction::TYPE_CAPTURE_TIMESTAMP;
+	instruction->pool = p_query_pool;
+	instruction->index = p_index;
 }
 
 void RenderingDeviceGraph::add_capture_timestamp(RDD::QueryPoolID p_query_pool, uint32_t p_index) {

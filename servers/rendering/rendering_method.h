@@ -34,6 +34,8 @@
 #include "servers/rendering/rendering_server_enums.h"
 #include "servers/rendering/rendering_server_types.h"
 
+// Defines scene-renderer orchestration, including diagnostic instance labels. Geometry backends own color-draw timing; labels have no culling semantics.
+
 #ifdef XR_DISABLED
 // RendererSceneCull::render_camera is empty when XR is disabled, but
 // it and RenderingMethod::render_camera have a parameter for XRInterface.
@@ -68,6 +70,9 @@ public:
 	virtual RID scenario_allocate() = 0;
 	virtual void scenario_initialize(RID p_rid) = 0;
 
+	// Set world-space receiver heights for stable single-map orthographic shadows; equal bounds disable fitting.
+	virtual void scenario_set_shadow_receiver_height_range(RID p_scenario, const Vector2 &p_range) = 0;
+	virtual void scenario_set_shadow_caster_query(RID p_scenario, bool p_camera_query, float p_padding) = 0;
 	virtual void scenario_set_environment(RID p_scenario, RID p_environment) = 0;
 	virtual void scenario_set_camera_attributes(RID p_scenario, RID p_attributes) = 0;
 	virtual void scenario_set_fallback_environment(RID p_scenario, RID p_environment) = 0;
@@ -102,6 +107,9 @@ public:
 	virtual void instance_set_visibility_parent(RID p_instance, RID p_parent_instance) = 0;
 
 	virtual void instance_set_ignore_culling(RID p_instance, bool p_enabled) = 0;
+	// Diagnostic labels do not participate in rendering or culling decisions.
+	virtual void instance_set_profile_label(RID p_instance, const StringName &p_label) = 0;
+	virtual void instance_set_gpu_placement_culling(RID p_instance, RID p_positions, RID p_visible_multimesh, const Vector4 &p_origin_tile_height, float p_radius, float p_center_height) = 0;
 
 	// don't use these in a game!
 	virtual Vector<ObjectID> instances_cull_aabb(const AABB &p_aabb, RID p_scenario = RID()) const = 0;
@@ -135,6 +143,8 @@ public:
 	virtual void sky_set_mode(RID p_sky, RSE::SkyMode p_samples) = 0;
 	virtual void sky_set_material(RID p_sky, RID p_material) = 0;
 	virtual Ref<Image> sky_bake_panorama(RID p_sky, float p_energy, bool p_bake_irradiance, const Size2i &p_size) = 0;
+	// Borrow the active cosine-convolved RD array for renderer inspection.
+	virtual RID sky_get_cosine_cone_texture_rd(RID p_sky) = 0;
 
 	/* COMPOSITOR EFFECT API */
 
